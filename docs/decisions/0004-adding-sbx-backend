@@ -172,12 +172,14 @@ The extracted-VSIX gate (`npm run test:sandbox-package`) passes with the indepen
 
 This completed step's revised scope supersedes its earlier bundled-SDK/peer-shim requirement and packaged real-SBX smoke command; those are not outstanding step-7 requirements.
 
-### 8. Implement pure sandbox configuration and command composition
+### ~~8. Implement pure sandbox configuration and command composition~~ — Completed
 
-- Add VS Code-independent helpers under `src/sbx/` for name normalization/override, host tilde expansion, canonical session paths, workspace-containment rejection, command-provider JSON validation, and final argv composition.
-- Implement the default Pi command provider using Tauren's packaged standalone sandbox kit as the main kit, and the generic third-party provider contract. Add the server mixin independently through Tauren's final argv composition for either provider. Specify supported SBX versions/argument forms so options, additional workspaces, and primary workspace ordering can be validated rather than guessed.
-- Define how the configured provider executable and its arguments are represented without requiring shell-string parsing. Apply workspace trust checks before executing workspace-configurable host commands.
-- **Test gate:** unit tests cover basename collisions, overrides, invalid names/roots, conflicting or repeated controlled arguments, provider failures/malformed output, unknown response versions, additional mixin kits/workspaces, and paths with spaces/metacharacters. Assert exact spawn argv and that no shell is used for local execution.
+- ~~Add VS Code-independent helpers under `src/sbx/` for name normalization/override, host tilde expansion, canonical session paths, workspace-containment rejection, command-provider JSON validation, and final argv composition.~~
+- ~~Implement the default Pi command provider using Tauren's packaged standalone sandbox kit as the main kit, and the generic third-party provider contract. Add the server mixin independently through Tauren's final argv composition for either provider. Specify supported SBX versions/argument forms so options, additional workspaces, and primary workspace ordering can be validated rather than guessed.~~
+- ~~Define how the configured provider executable and its arguments are represented without requiring shell-string parsing. Apply workspace trust checks before executing workspace-configurable host commands.~~
+- ~~**Test gate:** unit tests cover basename collisions, overrides, invalid names/roots, conflicting or repeated controlled arguments, provider failures/malformed output, unknown response versions, additional mixin kits/workspaces, and paths with spaces/metacharacters. Assert exact spawn argv and that no shell is used for local execution.~~
+
+Pure helpers in `src/sbx/configuration.ts`, `commandProvider.ts`, and `commandComposition.ts` implement canonical identity/storage, executable-plus-args providers, workspace trust gating, and strict create/run argv composition. The [provider contract and supported CLI subset](../development/sbx-command-provider.md) documents accepted options and POSIX-only path constraints. Unit tests exercise real temporary provider processes without SBX or VS Code. Lifecycle code must supply the actual VS Code trust decision and execute composed argv directly; no settings/backend selection is exposed by this increment. Exact installed-SBX version checks remain lifecycle work rather than a claim of broad CLI compatibility.
 
 ### 9. Implement sandbox lifecycle and SSH transport
 

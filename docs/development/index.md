@@ -8,6 +8,7 @@ Start with:
 - [UI Language](./ui-language.md)
 - [Pi Integration](./pi-integration.md)
 - [SBX Mixin Installation Contract](./sbx-kit.md)
+- [Sandbox Command Providers](./sbx-command-provider.md)
 - [Webview](./webview.md)
 - [Diff Lifecycle](./diff-lifecycle.md)
 
