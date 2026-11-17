@@ -1,8 +1,12 @@
 import type { Readable, Writable } from 'node:stream';
 import {
   createMessageConnection, StreamMessageReader, StreamMessageWriter,
-  type Logger, type MessageConnection
+  type Logger, type MessageConnection as JsonRpcMessageConnection
 } from 'vscode-jsonrpc/node.js';
+
+// A named structural type keeps inferred consumer declarations portable when
+// JSON-RPC is installed only in this package's nested node_modules.
+export interface MessageConnection extends JsonRpcMessageConnection {}
 
 /** Content-Length framing, UTF-8 decoding, request IDs, and cancellation are
  * owned by vscode-jsonrpc, not a second Tauren codec. This adapter supplies the

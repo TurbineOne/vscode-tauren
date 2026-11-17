@@ -5,12 +5,12 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { CancellationTokenSource, ResponseError, type CancellationToken } from 'vscode-jsonrpc';
+import { CancellationTokenSource, ResponseError, type CancellationToken } from '@tauren/shared/sbx/protocol';
 import { setTimeout as delay } from 'node:timers/promises';
 import {
   createProtocolConnection, Requests, UiRequests, Notifications, PROTOCOL_VERSION,
   TaurenErrorCodes, type EventParams, type CustomParams, type JsonValue
-} from '../protocol/index.js';
+} from '@tauren/shared/sbx/protocol';
 
 const deadline = 10_000;
 const options = { timeout: 30_000 };

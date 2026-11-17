@@ -27,11 +27,10 @@ prereleases must match exactly. The guard also checks the server manifest/lock
 and installed version consistency. Root SDK compilation and verification run
 this guard, so SDK updates cannot silently cross a release line.
 
-`@tauren/sandbox-server/protocol` exports the built, VS Code-independent contract
-and connection helper. A future host adapter can consume this package subpath
-without importing extension code into the server. Its ESM output can be imported
-from Node 22 or dynamically from the CommonJS extension. The build emits `.d.ts`
-files. Root `npm run compile` also bundles the server adapter into the generated
+Both the server and host import the VS Code-independent contract and connection
+helper directly from `@tauren/shared/sbx/protocol`. The shared project supplies
+ESM/CommonJS output and declarations; the server has no protocol re-export layer.
+Root `npm run compile` also bundles the server adapter into the generated
 server mixin and stages the default sandbox descriptor as a separate kit. The
 pinned SDK remains the dependency for standalone development and tests; the
 packaged server instead loads the sandbox's existing Pi installation.

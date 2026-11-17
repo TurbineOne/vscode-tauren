@@ -181,13 +181,17 @@ This completed step's revised scope supersedes its earlier bundled-SDK/peer-shim
 
 Pure helpers in `src/sbx/configuration.ts`, `commandProvider.ts`, and `commandComposition.ts` implement canonical identity/storage, executable-plus-args providers, workspace trust gating, and strict create/run argv composition. The [provider contract and supported CLI subset](../development/sbx-command-provider.md) documents accepted options and POSIX-only path constraints. Unit tests exercise real temporary provider processes without SBX or VS Code. Lifecycle code must supply the actual VS Code trust decision and execute composed argv directly; no settings/backend selection is exposed by this increment. Exact installed-SBX version checks remain lifecycle work rather than a claim of broad CLI compatibility.
 
-### 9. Implement sandbox lifecycle and SSH transport
+### ~~9. Implement sandbox lifecycle and SSH transport~~ — Completed
 
-- Add an injectable lifecycle service for prerequisite checks, sandbox lookup/inspection, creation, starting a stopped sandbox, and reattachment. Invoke the provider only when creation is required; never automatically remove an existing sandbox.
-- Validate workspace association before adoption and server compatibility/session configuration during the handshake. Distinguish missing prerequisites, incompatible existing sandboxes, timeouts, and SSH/server failures with actionable diagnostics.
-- Implement the framed SSH transport using the tested protocol and launch construction. Use the Kward transport as a reference without coupling SBX to the Kward protocol or refactoring unrelated code. Bound startup/handshake/shutdown and reject pending calls on failure.
-- Coordinate concurrent clients so opening multiple Tauren sessions does not race to create the same sandbox. Dispose only the relevant server connection, leaving the sandbox alive.
-- **Test gate:** fixture-process tests cover absent/running/stopped/incompatible sandboxes, provider invocation counts, create races, SSH readiness, handshake mismatches, startup cancellation, stderr/error reporting, and independent connection disposal. No real sandbox is required for this gate.
+- ~~Add an injectable lifecycle service for prerequisite checks, sandbox lookup/inspection, creation, starting a stopped sandbox, and reattachment. Invoke the provider only when creation is required; never automatically remove an existing sandbox.~~
+- ~~Validate workspace association before adoption and server compatibility/session configuration during the handshake. Distinguish missing prerequisites, incompatible existing sandboxes, timeouts, and SSH/server failures with actionable diagnostics.~~
+- ~~Implement the framed SSH transport using the tested protocol and launch construction. Use the Kward transport as a reference without coupling SBX to the Kward protocol or refactoring unrelated code. Bound startup/handshake/shutdown and reject pending calls on failure.~~
+- ~~Coordinate concurrent clients so opening multiple Tauren sessions does not race to create the same sandbox. Dispose only the relevant server connection, leaving the sandbox alive.~~
+- ~~**Test gate:** fixture-process tests cover absent/running/stopped/incompatible sandboxes, provider invocation counts, create races, SSH readiness, handshake mismatches, startup cancellation, stderr/error reporting, and independent connection disposal. No real sandbox is required for this gate.~~
+
+Implemented the injectable lifecycle and per-client framed transport under `src/sbx/`, with fixture-process gates for creation/adoption, SSH auto-start/readiness, concurrency, cancellation, handshake validation, stderr and independent disposal. The canonical protocol/framing helpers now live in `shared/src/sbx/`, consumed as CJS/ESM without cross-project source imports. Stopped sandboxes start through SSH, not an invented `sbx start` command or policy-changing `run -d`.
+
+**Outstanding step-9 compatibility verification:** SBX's inspect JSON schema is undocumented. The narrow `{ name, workspace }` decoder is explicitly provisional and fails closed on unknown shapes; real v0.51 primary-workspace/mount metadata (including clone mode) must be captured and supported before this step is considered complete. See [lifecycle details and limits](../development/sbx-lifecycle.md). Fixture success does not establish production-SBX adoption compatibility. No real SBX is available in this environment.
 
 ### 10. Implement the Tauren SBX AgentClient adapter
 

@@ -1,8 +1,8 @@
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { AgentSession, SettingsManager } from '@earendil-works/pi-coding-agent';
-import { ErrorCodes, ResponseError, type MessageConnection } from 'vscode-jsonrpc';
-import { Requests, TaurenErrorCodes, type SettingResult } from './protocol/index.js';
+import { ErrorCodes, ResponseError, type MessageConnection } from '@tauren/shared/sbx/protocol';
+import { Requests, TaurenErrorCodes, type SettingResult } from '@tauren/shared/sbx/protocol';
 
 type RuntimeModel = ReturnType<AgentSession['modelRuntime']['getModels']>[number];
 const thinkingLevels = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;

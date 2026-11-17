@@ -11,7 +11,9 @@ This is Tauren's private SDK-backed protocol, not Pi CLI RPC or JSON mode.
 
 Both peers can send requests; "host" does not mean the only request initiator.
 
-`src/protocol/contract.ts` is the source of method names and compile-time types.
+`shared/src/sbx/contract.ts` (relative to the repository root) is the source of
+method names and compile-time types. Both peers import it through
+`@tauren/shared/sbx/protocol`.
 `vscode-jsonrpc` is a standalone Microsoft JSON-RPC library with no VS Code API
 dependency. It owns framing, JSON parsing, correlation, errors, and cancellation;
 Tauren does not maintain a second JSON-RPC parser. `RequestType<P,R,E>` describes

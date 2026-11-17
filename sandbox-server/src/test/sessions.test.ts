@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import {
   CancellationTokenSource, ErrorCodes, Requests, ResponseError, TaurenErrorCodes, type Snapshot
-} from '../protocol/index.js';
+} from '@tauren/shared/sbx/protocol';
 import {
   createServerFixture, completeTurn, eventually, rejectsCode, serverTestOptions,
   type ServerFixture, type ServerProcess
