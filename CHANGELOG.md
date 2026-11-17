@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add the internal SBX lifecycle service and per-client framed SSH transport, with bounded startup/shutdown and offline fixture coverage. Backend selection is not exposed yet; production SBX inspection-schema verification remains outstanding.
+
 ### Changed
 
 - Provide whisper.cpp with a German-English software-development vocabulary prompt to improve transcription of technical terms such as “git commit.”

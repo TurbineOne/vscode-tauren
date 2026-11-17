@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import type { CompletionParams } from '../protocol/contract.js';
+import type { CompletionParams } from '@tauren/shared/sbx/protocol';
 import type { PiAutocompleteSuggestions } from '@tauren/shared/completion/baseProvider';
 import { PiAutocompleteRegistry } from '@tauren/shared/completion/piAutocompleteRegistry';
 

@@ -67,7 +67,8 @@ Session diff behavior lives under `src/diff/`. Tauren tracks session-specific ch
 `shared/` is a private third Node project, installed by the extension and
 `sandbox-server/` as the local `@tauren/shared` dependency. It owns pure completion,
 component rendering/facades, session tree/summary parsing and origin scanning.
-Transport-specific UI hosts remain separate. Conditional exports provide CommonJS
+It also owns the shared sandbox wire contract and JSON-RPC framing helpers;
+`vscode-jsonrpc` is its runtime dependency. Transport-specific UI hosts remain separate. Conditional exports provide CommonJS
 for the extension and ESM for the server; each consumer builds the shared package
 first. Install its independent lockfile with `npm ci --prefix shared`.
 
@@ -78,7 +79,9 @@ backend-specific behavior remain local. Do not copy helpers between projects. Th
 ## Sandbox UI and rendering flow
 
 The sketch below shows the SBX UI path. The standalone server side is implemented;
-the SSH transport and Tauren SBX host adapter are still planned. The existing
+the concrete per-client SSH transport and lifecycle service are implemented,
+with the real-SBX inspection schema still an explicit verification gap (see
+[Sandbox lifecycle](./sbx-lifecycle.md)). The Tauren SBX host adapter is still planned. The existing
 in-process Pi backend continues to render without crossing a sandbox boundary.
 
 ```text
@@ -114,7 +117,7 @@ in-process Pi backend continues to render without crossing a sandbox boundary.
  │      handleInput / cleanup  │   │                                 │
  │      redraw notification ───┼──►│ Request another render          │
  └──────────────────────────────┘   └─────────────────────────────────┘
-                   Boundary: framed JSON-RPC over SSH stdio (planned)
+                   Boundary: framed JSON-RPC over SSH stdio
 ```
 
 There are two rendering paths:

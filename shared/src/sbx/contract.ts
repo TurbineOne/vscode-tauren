@@ -134,7 +134,7 @@ export interface RenderParams extends SurfaceParams {
   width: number; height: number; cellWidth?: number; cellHeight?: number;
 }
 /** Image/text blocks preserve Tauren's component rendering without serializing components. */
-export type RenderBlock = import('@tauren/shared/rendering/renderContent').ExtensionRenderContent['blocks'][number];
+export type RenderBlock = import('../rendering/renderContent.js').ExtensionRenderContent['blocks'][number];
 export interface RenderResult { lines: string[]; blocks?: RenderBlock[]; cursor?: { row: number; column: number } }
 export interface SurfaceStateParams extends SurfaceParams { attached: boolean; focused: boolean }
 export interface SurfaceInputParams extends SurfaceParams { input: string }

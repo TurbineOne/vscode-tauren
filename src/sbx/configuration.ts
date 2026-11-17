@@ -86,7 +86,10 @@ async function canonicalDirectory(value: string): Promise<string> {
     }
     // lstat distinguishes an absent component from an existing dangling symlink.
     try {
-      await fs.lstat(value);
+      const entry = await fs.lstat(value);
+      // Another client may have created this directory after realpath returned
+      // ENOENT. Retry the now-existing directory, but never bless a dangling link.
+      if (entry.isDirectory()) return canonicalDirectory(value);
       throw new Error(`Cannot resolve directory symlink: ${value}`);
     } catch (statError) {
       if ((statError as NodeJS.ErrnoException).code !== 'ENOENT') {

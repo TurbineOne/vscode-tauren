@@ -9,6 +9,7 @@ Start with:
 - [Pi Integration](./pi-integration.md)
 - [SBX Mixin Installation Contract](./sbx-kit.md)
 - [Sandbox Command Providers](./sbx-command-provider.md)
+- [Sandbox Lifecycle and SSH Transport](./sbx-lifecycle.md)
 - [Webview](./webview.md)
 - [Diff Lifecycle](./diff-lifecycle.md)
 

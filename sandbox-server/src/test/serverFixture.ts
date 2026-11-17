@@ -8,7 +8,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import {
   createProtocolConnection, Notifications, Requests, UiRequests, PROTOCOL_VERSION, ResponseError,
   type EventParams, type InitializeParams
-} from '../protocol/index.js';
+} from '@tauren/shared/sbx/protocol';
 
 const main = fileURLToPath(new URL('../main.js', import.meta.url));
 const extension = fileURLToPath(new URL('./fixtures/offline-provider.js', import.meta.url));

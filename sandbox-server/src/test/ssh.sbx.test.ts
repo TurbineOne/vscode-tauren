@@ -9,7 +9,7 @@ import { buildServerLaunchCommand, quoteRemoteArgument } from '@tauren/shared/ss
 import {
   createProtocolConnection, Notifications, Requests, UiRequests, PROTOCOL_VERSION,
   type EventParams, type InitializeParams
-} from '../protocol/index.js';
+} from '@tauren/shared/sbx/protocol';
 import { createSbxShellFixture } from './sbxShellFixture.js';
 
 type SbxShellFixture = Awaited<ReturnType<typeof createSbxShellFixture>>;

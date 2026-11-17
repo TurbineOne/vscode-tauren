@@ -1,6 +1,6 @@
 import type { ExtensionUIContext, ExtensionUIDialogOptions, TerminalInputHandler, Theme } from '@earendil-works/pi-coding-agent';
-import { CancellationTokenSource, ErrorCodes, ResponseError, type MessageConnection, type NotificationType, type RequestType, type Disposable } from 'vscode-jsonrpc';
-import { Notifications, UiRequests, type Snapshot } from '../protocol/index.js';
+import { CancellationTokenSource, ErrorCodes, ResponseError, type MessageConnection, type NotificationType, type RequestType, type Disposable } from '@tauren/shared/sbx/protocol';
+import { Notifications, UiRequests, type Snapshot } from '@tauren/shared/sbx/protocol';
 import { createOverlayHandle, createTuiFacade, isKeyRelease, setComponentFocused, taurenKeybindings, taurenTheme, type CustomUiComponent, type CustomUiTerminal } from '@tauren/shared/extensionUi/facades';
 import { RemoteFooterData } from './footerData.js';
 import { renderComponentContent } from '@tauren/shared/rendering/renderContent';

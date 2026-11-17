@@ -4,7 +4,7 @@ import {
   createAgentSessionRuntime, createAgentSessionServices, createAgentSessionFromServices,
   getAgentDir, SessionManager, SettingsManager, VERSION, type AgentSessionRuntime
 } from '@earendil-works/pi-coding-agent';
-import { ErrorCodes, ResponseError, type MessageConnection } from 'vscode-jsonrpc';
+import { ErrorCodes, ResponseError, type MessageConnection } from '@tauren/shared/sbx/protocol';
 import { registerRuntimeControls } from './runtimeControls.js';
 import { PiAutocompleteRegistry } from '@tauren/shared/completion/piAutocompleteRegistry';
 import { registerSessionControls, validateSessionPath } from './sessionControls.js';
@@ -13,7 +13,7 @@ import { PiSdkRenderer } from '@tauren/shared/rendering/piSdkRendering';
 import {
   assertProtocolVersion, Notifications, PROTOCOL_VERSION, Requests, TaurenErrorCodes,
   type InitializeResult, type Snapshot, type JsonValue, type PromptParams
-} from './protocol/index.js';
+} from '@tauren/shared/sbx/protocol';
 
 interface ServerConfiguration {
   workspace: string;

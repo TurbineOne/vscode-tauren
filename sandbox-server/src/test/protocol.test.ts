@@ -5,7 +5,7 @@ import {
   createProtocolConnection, Requests, UiRequests,
   PROTOCOL_VERSION, assertProtocolVersion, TaurenErrorCodes,
   ResponseError
-} from '../protocol/index.js';
+} from '@tauren/shared/sbx/protocol';
 
 /** Test fixture for delivering a complete notification before EOF. */
 function frame(value: unknown): Buffer {

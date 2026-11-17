@@ -2,7 +2,7 @@
 
 import { Console } from 'node:console';
 import { readFileSync } from 'node:fs';
-import { createProtocolConnection } from './protocol/index.js';
+import { createProtocolConnection } from '@tauren/shared/sbx/protocol';
 
 // Reserve stdout for protocol bytes before loading the SDK or any extensions.
 // Extension console output remains visible as stderr diagnostics.
