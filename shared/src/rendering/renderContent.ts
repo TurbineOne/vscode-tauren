@@ -50,7 +50,18 @@ export function renderTextContent(lines: unknown): ExtensionRenderContent {
   };
 }
 
+/** Local adapters can supply already-normalized remote render DTOs without
+ * reconstructing image components or encoding images into terminal text. The
+ * symbol is local code, never a remotely supplied executable property.
+ */
+export const renderContentProvider = Symbol('tauren.renderContentProvider');
+export interface RenderContentProvider {
+  [renderContentProvider](width: number, cellDimensions?: ExtensionCellDimensions): ExtensionRenderContent;
+}
+
 export function renderComponentContent(component: unknown, width: number, cellDimensions?: ExtensionCellDimensions): ExtensionRenderContent {
+  const provider = component as Partial<RenderContentProvider> | null | undefined;
+  if (typeof provider?.[renderContentProvider] === 'function') return provider[renderContentProvider](width, cellDimensions);
   const normalizedCellDimensions = normalizeCellDimensions(cellDimensions);
   const blocks = renderComponentBlocks(component, width, 0, new Set<unknown>(), normalizedCellDimensions);
 

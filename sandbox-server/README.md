@@ -118,8 +118,10 @@ both the server-side path and HTML content; the future host adapter must materia
 that content and apply host-side export presentation.
 
 `extensionUi/` keeps component factories, callbacks, terminal handlers and custom
-`done(T)` values beside the SDK. The wire carries dialogs, opaque surface handles,
-rendered text/image blocks, input and UI intent. Reverse requests are cancelled
+`done(T)` values beside the SDK. A JSON-RPC request names an existing handler on
+the other side and sends its parameters as data. For example, the host asks the
+server’s `ui.render` handler to render a surface ID and gets text and image
+blocks back. Neither side sends functions to the other. Reverse requests are cancelled
 on timeout, abort, reset or disconnect; late factory results are disposed rather
 than remounted. The in-process Tauren bridge's documented terminal-only no-ops
 are preserved, including the empty composer-text getter and unsupported theme
