@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add the internal SBX AgentClient adapter with streamed events, persisted-history reconnect, credential guidance, and remote extension UI bridging. Backend selection is not exposed yet.
+
 - Add the internal SBX lifecycle service and per-client framed SSH transport, with bounded startup/shutdown and offline fixture coverage. Backend selection is not exposed yet; production SBX inspection-schema verification remains outstanding.
 
 ### Changed

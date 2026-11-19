@@ -11,6 +11,10 @@ Keep this file durable and concise. Prefer links to repo docs over repeating det
 Use the Tauren UI Language from `docs/development/ui-language.md`.
 Do not invent new names for surfaces.
 
+## Writing Style
+
+All prose a human will read, including documentation, code comments, commit messages, and summaries, must follow `docs/development/writing-style.md`. In short, each paragraph should state one point in its first sentence and use complete, plain sentences to explain why that point matters, rather than listing disconnected facts or inventing shorthand that the reader has to decode. Load the `cohesive-writing` skill before writing or revising documentation. When the user corrects a writing problem, add the problem to the catalog of failure patterns in that guide so that the correction applies to future work.
+
 ## Start Here
 
 Before architecture or integration work, read the relevant development docs:

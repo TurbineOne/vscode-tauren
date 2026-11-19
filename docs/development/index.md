@@ -5,11 +5,14 @@ This section is for contributors working on Tauren itself.
 Start with:
 
 - [Architecture](./architecture.md)
+- [SBX Rendering and Interaction Flows](./sbx-rendering.md)
 - [UI Language](./ui-language.md)
+- [Writing Style](./writing-style.md)
 - [Pi Integration](./pi-integration.md)
 - [SBX Mixin Installation Contract](./sbx-kit.md)
 - [Sandbox Command Providers](./sbx-command-provider.md)
 - [Sandbox Lifecycle and SSH Transport](./sbx-lifecycle.md)
+- [Sandbox AgentClient Adapter](./sbx-client.md)
 - [Webview](./webview.md)
 - [Diff Lifecycle](./diff-lifecycle.md)
 

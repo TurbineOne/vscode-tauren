@@ -1,3 +1,14 @@
+/**
+ * This module defines the host-facing contract through which Pi adapters request
+ * extension UI from Tauren. It reuses Pi SDK types for component factories and
+ * dialog options so existing extensions remain compatible, while Tauren's hosts
+ * handle presentation and user input. The prompt and editor message types describe
+ * how those hosts communicate with the webview. When no interactive host is
+ * available, createCancellingExtensionUi supplies a fallback that forwards
+ * notifications and returns no selection or result from interactive requests.
+ *
+ * @packageDocumentation
+ */
 import type { ExtensionUIContext, ExtensionUIDialogOptions, ExtensionWidgetOptions, TerminalInputHandler } from '@earendil-works/pi-coding-agent';
 
 export type MaybePromise<T> = T | PromiseLike<T>;
@@ -43,7 +54,7 @@ export type ExtensionUi = {
   select(title: string, options: string[], dialogOptions?: ExtensionUIDialogOptions): MaybePromise<string | undefined>;
   confirm(title: string, message: string | undefined, dialogOptions?: ExtensionUIDialogOptions): MaybePromise<boolean | undefined>;
   input(title: string, placeholder: string | undefined, dialogOptions?: ExtensionUIDialogOptions): MaybePromise<string | undefined>;
-  editor?(title: string, prefill: string | undefined): MaybePromise<string | undefined>;
+  editor?(title: string, prefill: string | undefined, dialogOptions?: ExtensionUIDialogOptions): MaybePromise<string | undefined>;
   custom?<T>(factory: ExtensionCustomUiFactory<T>, options?: ExtensionCustomUiOptions): MaybePromise<T | undefined>;
   setStatus?(key: string, text: string | undefined): void;
   clearStatuses?(): void;
@@ -52,6 +63,8 @@ export type ExtensionUi = {
   setWidget?(key: string, content: ExtensionWidgetContent | undefined, options?: ExtensionWidgetSetOptions): void;
   clearWidgets?(): void;
   onTerminalInput?(handler: TerminalInputHandler): () => void;
+  /** Remote interceptors need an awaited request/result, not a synchronous SDK hook. */
+  onTerminalInputAsync?(handler: (data: string) => Promise<ReturnType<TerminalInputHandler>>): () => void;
   getToolsExpanded?(): boolean;
   setToolsExpanded?(expanded: boolean): void;
   setEditorText?(text: string): void;

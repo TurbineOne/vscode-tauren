@@ -304,6 +304,39 @@ suite('TaurenSessionManager', () => {
     harness.manager.dispose();
   });
 
+  test('awaits remote terminal interceptors in arrival order and preserves transformations', async () => {
+    const harness = createManagerHarness([new FakePiClient()]);
+    await harness.manager.handleWebviewMessage({ type: 'submit', text: 'hello' });
+    const ui = harness.clientOptions[0].extensionUi!;
+    const received: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    ui.onTerminalInputAsync?.(async input => {
+      received.push(`remote:${input}`);
+      if (input === 'one') await gate;
+      return { data: `${input}!` };
+    });
+    ui.onTerminalInput?.(input => { received.push(`local:${input}`); });
+    await harness.manager.handleWebviewMessage({ type: 'extensionTerminalInput', data: 'one' });
+    await harness.manager.handleWebviewMessage({ type: 'extensionTerminalInput', data: 'two' });
+    assert.deepStrictEqual(received, ['remote:one']);
+    release(); await flushPromises();
+    assert.deepStrictEqual(received, ['remote:one', 'local:one!', 'remote:two', 'local:two!']);
+    harness.manager.dispose();
+  });
+
+  test('aborting a remote editor request hides the host editor', async () => {
+    const harness = createManagerHarness([new FakePiClient()]);
+    await harness.manager.handleWebviewMessage({ type: 'submit', text: 'hello' });
+    const controller = new AbortController();
+    const result = harness.clientOptions[0].extensionUi!.editor!('Remote edit', 'text', { signal: controller.signal });
+    assert.strictEqual(harness.extensionEditorMessages.at(-1)?.type, 'extensionEditorShow');
+    controller.abort();
+    assert.strictEqual(await result, undefined);
+    assert.strictEqual(harness.extensionEditorMessages.at(-1)?.type, 'extensionEditorHide');
+    harness.manager.dispose();
+  });
+
   test('surfaces custom extension footer for the active session', async () => {
     const harness = createManagerHarness([new FakePiClient()]);
 

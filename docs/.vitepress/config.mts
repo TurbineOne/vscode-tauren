@@ -51,7 +51,9 @@ const developmentSidebar = [
     items: [
       { text: 'Overview', link: '/development/' },
       { text: 'Architecture', link: '/development/architecture' },
+      { text: 'SBX Rendering and Interaction Flows', link: '/development/sbx-rendering' },
       { text: 'UI Language', link: '/development/ui-language' },
+      { text: 'Writing Style', link: '/development/writing-style' },
       { text: 'Pi Integration', link: '/development/pi-integration' },
       { text: 'Webview', link: '/development/webview' },
       { text: 'Sessions', link: '/development/sessions' },

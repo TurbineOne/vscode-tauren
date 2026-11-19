@@ -70,6 +70,8 @@ type PendingExtensionEditor = {
   id: string;
   sessionId: string;
   resolve(value: string | undefined): void;
+  signal?: AbortSignal;
+  abortHandler?: () => void;
 };
 
 type PendingExtensionPrompt = {
@@ -97,7 +99,8 @@ type OpenSession = {
   extensionFooterHost: ExtensionFooterHost;
   extensionWidgetHost: ExtensionWidgetHost;
   extensionStatuses: Map<string, string>;
-  terminalInputHandlers: Set<TerminalInputHandler>;
+  terminalInputHandlers: Set<(data: string) => ReturnType<TerminalInputHandler> | Promise<ReturnType<TerminalInputHandler>>>;
+  terminalInputQueue?: Promise<void>;
   toolsExpanded: boolean;
   inactiveSince: number | undefined;
   inactiveDisposeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -755,6 +758,7 @@ export class TaurenSessionManager {
       },
       clearWidgets: () => extensionWidgetHost.clearWidgets(),
       onTerminalInput: (handler) => this.registerTerminalInputHandler(id, handler),
+      onTerminalInputAsync: (handler) => this.registerTerminalInputHandler(id, handler),
       getToolsExpanded: () => this.findOpenSession(id)?.toolsExpanded ?? false,
       setToolsExpanded: (expanded) => {
         const session = this.findOpenSession(id);
@@ -763,7 +767,7 @@ export class TaurenSessionManager {
           this.setToolsExpandedForSession(session, expanded);
         }
       },
-      editor: (title, prefill) => this.openExtensionEditorForSession(id, title, prefill),
+      editor: (title, prefill, dialogOptions) => this.openExtensionEditorForSession(id, title, prefill, dialogOptions),
       setEditorText: (text) => this.setEditorTextForSession(id, text),
       pasteToEditor: (text) => this.pasteToEditorForSession(id, text)
     };
@@ -887,7 +891,7 @@ export class TaurenSessionManager {
     }
   }
 
-  private registerTerminalInputHandler(id: string, handler: TerminalInputHandler): () => void {
+  private registerTerminalInputHandler(id: string, handler: (data: string) => ReturnType<TerminalInputHandler> | Promise<ReturnType<TerminalInputHandler>>): () => void {
     const session = this.findOpenSession(id);
 
     if (!session) {
@@ -930,24 +934,34 @@ export class TaurenSessionManager {
   }
 
   private dispatchTerminalInput(session: OpenSession, data: string): void {
-    for (const handler of Array.from(session.terminalInputHandlers)) {
-      try {
-        const result = handler(data);
-
-        if (result?.consume === true) {
-          return;
+    // Preserve arrival order when a remote interceptor awaits a JSON-RPC reply.
+    // Snapshot handlers at dispatch time; detached handlers must not run later.
+    const handlers = Array.from(session.terminalInputHandlers);
+    const dispatch = async () => {
+      let input = data;
+      for (const handler of handlers) {
+        if (!session.terminalInputHandlers.has(handler)) continue;
+        try {
+          const returned = handler(input);
+          const result = returned instanceof Promise ? await returned : returned;
+          if (result?.consume === true) return;
+          if (typeof result?.data === 'string') input = result.data;
+        } catch (error) {
+          this.options.showNotification(`Pi extension input handler failed: ${error instanceof Error ? error.message : String(error)}`, 'error');
         }
-      } catch (error) {
-        this.options.showNotification(`Pi extension input handler failed: ${error instanceof Error ? error.message : String(error)}`, 'error');
       }
-    }
+    };
+    const work = session.terminalInputQueue ? session.terminalInputQueue.then(dispatch) : dispatch();
+    session.terminalInputQueue = work;
+    void work.finally(() => { if (session.terminalInputQueue === work) session.terminalInputQueue = undefined; });
   }
 
   private setToolsExpandedForSession(session: OpenSession, expanded: boolean): void {
     session.toolsExpanded = expanded;
   }
 
-  private openExtensionEditorForSession(id: string, title: string, prefill: string | undefined): Promise<string | undefined> {
+  private openExtensionEditorForSession(id: string, title: string, prefill: string | undefined, options?: ExtensionUIDialogOptions): Promise<string | undefined> {
+    if (options?.signal?.aborted) return Promise.resolve(undefined);
     if (this.pendingExtensionEditor) {
       return Promise.resolve(undefined);
     }
@@ -964,7 +978,9 @@ export class TaurenSessionManager {
     const editorId = `extension-editor-${++this.extensionEditorSequence}`;
 
     return new Promise((resolve) => {
-      this.pendingExtensionEditor = { id: editorId, sessionId: id, resolve };
+      const abortHandler = () => this.cancelPendingExtensionEditor();
+      this.pendingExtensionEditor = { id: editorId, sessionId: id, resolve, signal: options?.signal, abortHandler };
+      options?.signal?.addEventListener('abort', abortHandler, { once: true });
       const posted = extensionEditor.postMessage({
         type: 'extensionEditorShow',
         id: editorId,
@@ -986,6 +1002,7 @@ export class TaurenSessionManager {
     }
 
     this.pendingExtensionEditor = undefined;
+    if (pending.abortHandler) pending.signal?.removeEventListener('abort', pending.abortHandler);
     pending.resolve(value);
   }
 
@@ -997,6 +1014,7 @@ export class TaurenSessionManager {
     }
 
     this.pendingExtensionEditor = undefined;
+    if (pending.abortHandler) pending.signal?.removeEventListener('abort', pending.abortHandler);
     this.options.extensionEditor?.postMessage({ type: 'extensionEditorHide', id: pending.id });
     pending.resolve(undefined);
   }

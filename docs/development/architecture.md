@@ -81,7 +81,8 @@ backend-specific behavior remain local. Do not copy helpers between projects. Th
 The sketch below shows the SBX UI path. The standalone server side is implemented;
 the concrete per-client SSH transport and lifecycle service are implemented,
 with the real-SBX inspection schema still an explicit verification gap (see
-[Sandbox lifecycle](./sbx-lifecycle.md)). The Tauren SBX host adapter is still planned. The existing
+[Sandbox lifecycle](./sbx-lifecycle.md)). The Tauren SBX host adapter is implemented internally (see
+[Sandbox AgentClient adapter](./sbx-client.md)); backend selection is not yet wired. The existing
 in-process Pi backend continues to render without crossing a sandbox boundary.
 
 ```text
@@ -90,9 +91,9 @@ in-process Pi backend continues to render without crossing a sandbox boundary.
                  ┌──────────────────────────────────────┐
                  │ Component → text/image rendering     │
                  │ Tool/custom-message renderers        │
-                 │ Theme, keybinding and TUI facades     │
+                 │ Theme, keybinding and TUI facades    │
                  │ Composer completion registry         │
-                 └─────────────┬─────────────┬──────────┘
+                 └────────────┬─────────────┬───────────┘
                      imported │             │ imported
                        as ESM ▼             ▼ as CommonJS
  ┌──────────────────────────────┐   ┌─────────────────────────────────┐
@@ -101,21 +102,21 @@ in-process Pi backend continues to render without crossing a sandbox boundary.
  │ Pi SDK + Pi extensions       │   │ Existing in-process Pi backend  │
  │   │                          │   │ uses the same shared helpers    │
  │   ├─ Tool/message callbacks  │   │                                 │
- │   │    → shared renderer     │   │ SBX host adapter (planned)      │
+ │   │    → shared renderer     │   │ SBX host adapter                │
  │   │    → transcript DTOs ────┼──►│   → transcript presentation     │
  │   │                          │   │                                 │
  │   └─ ctx.ui calls            │   │                                 │
  │        → RemoteExtensionUi ──┼──►│   → dialogs, status, Composer   │
- │        → local components   │   │   → widgets/footer/custom UI    │
- │                  ▲          │   │                │                │
- │                  │          │   │                ▼                │
- │      ui.render request ◄────┼───┤ Layout dimensions               │
- │      shared render helper   │   │                                 │
- │      text/image blocks ─────┼──►│ Webview draws the surface       │
- │                  ▲          │   │                │                │
+ │        → local components    │   │   → widgets/footer/custom UI    │
+ │                  ▲           │   │                │                │
+ │                  │           │   │                ▼                │
+ │      ui.render request ◄─────┼───┤ Layout dimensions               │
+ │      shared render helper    │   │                                 │
+ │      text/image blocks ──────┼──►│ Webview draws the surface       │
+ │                  ▲           │   │                │                │
  │      input/focus/dispose ◄───┼───┤ Keyboard and surface lifecycle  │
- │      handleInput / cleanup  │   │                                 │
- │      redraw notification ───┼──►│ Request another render          │
+ │      handleInput / cleanup   │   │                                 │
+ │      redraw notification ────┼──►│ Request another render          │
  └──────────────────────────────┘   └─────────────────────────────────┘
                    Boundary: framed JSON-RPC over SSH stdio
 ```
@@ -137,9 +138,12 @@ Composer changes use UI-intent notifications. Completion factories and cached
 suggestions remain beside Pi; the host exchanges text/cursor positions, suggestion
 labels, opaque item IDs and applied text/cursor results.
 
-**Never transferred:** component instances, renderer functions, closures, or
-arbitrary values passed to custom UI `done(value)`. Those execute and resolve
-inside the Pi process. The host owns actual VS Code/webview display and input.
+Each JSON-RPC request names a handler already registered by the receiving
+process and supplies data for it. For example, the host sends dimensions to the
+sandbox’s `ui.render` handler, while the sandbox sends choices to the host’s
+`ui.select` handler. The requests do not carry JavaScript functions. Pi extension
+components, render callbacks, and custom `done(value)` results stay inside the
+Pi process. The host handles display and user input.
 `shared/` supplies code to both processes; it neither connects them nor owns UI
 lifetimes. The host-specific UI hosts and `RemoteExtensionUi` therefore remain
 separate implementations.

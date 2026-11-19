@@ -193,12 +193,14 @@ Implemented the injectable lifecycle and per-client framed transport under `src/
 
 **Outstanding step-9 compatibility verification:** SBX's inspect JSON schema is undocumented. The narrow `{ name, workspace }` decoder is explicitly provisional and fails closed on unknown shapes; real v0.51 primary-workspace/mount metadata (including clone mode) must be captured and supported before this step is considered complete. See [lifecycle details and limits](../development/sbx-lifecycle.md). Fixture success does not establish production-SBX adoption compatibility. No real SBX is available in this environment.
 
-### 10. Implement the Tauren SBX AgentClient adapter
+### ~~10. Implement the Tauren SBX AgentClient adapter~~ — Completed
 
-- Add the adapter under `src/sbx/`, mapping RPC responses/events into normalized `AgentClient` behavior and using `src/extensionUi/` for Tauren-side UI hosting.
-- Support the full Pi-backend parity checklist: chat and tools, steering/follow-up, models/settings/resources, session/tree operations, completions, extension UI, and diagnostics. Credential-entry APIs must present the SBX documentation flow instead of writing credentials.
-- Preserve session-manager retention behavior and restore transcripts from Pi `getMessages()` after reconnecting. Do not treat cached transcript state as persisted truth or transparently replay interrupted work.
-- **Test gate:** adapter contract tests use a fixture server for protocol failures and the real standalone server for SDK behavior. Verify event normalization, bidirectional UI, session restore, multiple clients, disconnect recovery, and disposal without requiring VS Code to launch an actual sandbox.
+- ~~Add the adapter under `src/sbx/`, mapping RPC responses/events into normalized `AgentClient` behavior and using `src/extensionUi/` for Tauren-side UI hosting.~~
+- ~~Support the full Pi-backend parity checklist: chat and tools, steering/follow-up, models/settings/resources, session/tree operations, completions, extension UI, and diagnostics. Credential-entry APIs must present the SBX documentation flow instead of writing credentials.~~
+- ~~Preserve session-manager retention behavior and restore transcripts from Pi `getMessages()` after reconnecting. Do not treat cached transcript state as persisted truth or transparently replay interrupted work.~~
+- ~~**Test gate:** adapter contract tests use a fixture server for protocol failures and the real standalone server for SDK behavior. Verify event normalization, bidirectional UI, session restore, multiple clients, disconnect recovery, and disposal without requiring VS Code to launch an actual sandbox.~~
+
+`src/sbx/sbxClient.ts` now implements the normalized AgentClient contract over the concrete lifecycle/SSH service. `src/sbx/clientValidation.ts` validates response/event DTOs; `src/extensionUi/sbxExtensionUi.ts` hosts reverse dialogs and remote-rendered surfaces through existing Tauren UI hosts. Tests exercise the real standalone SDK server with offline extensions and a fixture executable, plus malformed protocol/disconnect cases. Explicit reconnect restores Pi history without replaying prompts; auth entrypoints show SBX guidance and never send credentials. See [adapter ownership and verification](../development/sbx-client.md). Backend selection, the real VS Code credential popup, discovery and clone/file-path integration remain step 11; real-SBX and Extension Host/manual parity claims remain outstanding.
 
 ### 11. Wire settings, session discovery, and extension behavior
 

@@ -152,10 +152,13 @@ records, secret values, or credential source paths.
   data, and optional text/image blocks preserve embedded component images.
   `ui.setSurfaceState` updates attached/focused state without disposing a surface.
   Surface IDs are opaque and connection-local.
-- Factory callbacks, TUI/theme/keybinding facades, components, footer data
-  providers, terminal handlers, and autocomplete providers remain beside the SDK.
-  Never serialize executable JavaScript. Function-valued widgets/footer/custom UI
-  become remotely rendered surfaces; invalidation notifications request redraw.
+- Requests carry a method name and data for a handler that the receiving process
+  has already registered. For example, `ui.select` supplies choices to the host
+  handler, and `ui.render` supplies a surface ID and dimensions to the sandbox
+  handler. Neither request transfers JavaScript code or functions.
+- The sandbox runs extension factories and keeps their components and callbacks
+  beside the SDK. The host refers to components by surface ID and requests
+  fresh render data after invalidation.
 - For `ui.custom`, host dismissal/cancellation returns null; server-side input
   calls component callbacks and `done(T)` retains arbitrary completion values
   server-local, cancels/dismisses the outstanding host request, and resolves the
