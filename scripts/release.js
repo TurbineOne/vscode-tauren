@@ -4,6 +4,7 @@ const childProcess = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { parseArgs } = require('node:util');
 
 const root = path.resolve(__dirname, '..');
 const npmCommand = process.platform === 'win32' ? 'npm.cmd' : 'npm';
@@ -20,7 +21,7 @@ const releaseState = {
 };
 
 function usage() {
-  return 'Usage: npm run publish -- <version>\nExample: npm run publish -- 1.1.0';
+  return 'Usage: npm run publish -- <version> [--github-only]\nExample: npm run publish -- 1.1.0 --github-only';
 }
 
 function fail(message) {
@@ -298,8 +299,8 @@ function createGithubRelease(tag, releaseNotes, vsixPath, tempDir) {
   releaseState.createdRelease = true;
 }
 
-function publishMarketplace() {
-  run(npxCommand, ['@vscode/vsce', 'publish']);
+function publishMarketplace(vsixPath) {
+  run(npxCommand, ['@vscode/vsce', 'publish', '--packagePath', vsixPath]);
 }
 
 function publishOpenVsx(vsixPath) {
@@ -335,22 +336,18 @@ function printCleanupInstructions(tag) {
   }
 }
 
-function main() {
-  const version = process.argv[2];
-  if (!version) {
-    fail(usage());
-  }
-
-  validateVersion(version);
+function main(version, githubOnly) {
   const tag = `v${version}`;
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tauren-release-'));
 
-  console.log(`Preparing release ${tag}`);
+  console.log(`Preparing release ${tag}${githubOnly ? ' (GitHub only)' : ''}`);
 
   checkCleanWorkingTree();
   const branchInfo = getBranchInfo();
   checkTools();
-  checkOpenVsxAccess();
+  if (!githubOnly) {
+    checkOpenVsxAccess();
+  }
   checkBranchSynced(branchInfo);
   checkReleaseDoesNotExist(tag);
   checkChangelogReady();
@@ -358,22 +355,37 @@ function main() {
 
   const releaseNotes = updateReleaseFiles(version);
   const vsixPath = createPackage(version, tempDir);
+  // Test the versioned artifact before publishing or pushing a release tag.
+  run(process.execPath, ['--test', 'scripts/sandbox-package.sbx.test.js'], {
+    env: { ...process.env, TAUREN_TEST_VSIX: vsixPath }
+  });
   commitAndTag(tag);
   pushCommitAndTag(branchInfo, tag);
   createGithubRelease(tag, releaseNotes, vsixPath, tempDir);
-  publishMarketplace();
-  publishOpenVsx(vsixPath);
+  if (!githubOnly) {
+    publishMarketplace(vsixPath);
+    publishOpenVsx(vsixPath);
+  }
 
   console.log(`\nReleased ${tag}`);
 }
 
+let version;
 try {
-  main();
+  const { values, positionals } = parseArgs({
+    options: { 'github-only': { type: 'boolean' }, help: { type: 'boolean', short: 'h' } },
+    allowPositionals: true
+  });
+  if (values.help) {
+    console.log(usage());
+  } else {
+    if (positionals.length !== 1) fail(usage());
+    validateVersion(positionals[0]);
+    version = positionals[0];
+    main(version, values['github-only']);
+  }
 } catch (error) {
   console.error(`\nRelease failed: ${error.message}`);
-  const version = process.argv[2];
-  if (version && /^\d+\.\d+\.\d+$/.test(version)) {
-    printCleanupInstructions(`v${version}`);
-  }
-  process.exit(1);
+  if (version) printCleanupInstructions(`v${version}`);
+  process.exitCode = 1;
 }

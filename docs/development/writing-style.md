@@ -228,6 +228,17 @@ A request sends a method name and data for the receiving process to use.
 renders the component and returns text and image data.” For a local call, say
 where the method is defined and what it does.
 
+### Verification notes tied to a development environment
+
+**Pattern.** A release instruction says that verification remains open or that a
+tool was unavailable in the author’s environment.
+
+**Why it fails.** The reader still needs to know where to run the check, which
+command to use, and what evidence to record.
+
+**Fix.** State the next action: “Run `npm run test:all` on the Docker Sandboxes
+host, outside the sandbox. Record the SBX version and host platform tested.”
+
 ### Reference to private plan context
 
 **Pattern.** The text refers to a plan, step number, or discussion that the
