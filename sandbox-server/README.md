@@ -114,8 +114,8 @@ wire policy is not a filesystem security boundary against sandbox code.
 rebinds event/UI callbacks, and reconstructs history from Pi session files.
 Switches remain in the initialized store/workspace; imports copy normalized JSONL
 into that store. Discovery/origin scans do not fall back to `~/.pi`. Export returns
-both the server-side path and HTML content; the future host adapter must materialize
-that content and apply host-side export presentation.
+both the server-side path and HTML content. `SbxClient.exportHtml()` writes the
+content to a host file for Tauren’s export presentation.
 
 `extensionUi/` keeps component factories, callbacks, terminal handlers and custom
 `done(T)` values beside the SDK. A JSON-RPC request names an existing handler on

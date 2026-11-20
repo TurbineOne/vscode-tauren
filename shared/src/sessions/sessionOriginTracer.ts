@@ -27,6 +27,8 @@ export type TraceOriginOptions = {
   /** Discovery metadata used when a session header omits its id or cwd. */
   sessionMetadata?: ReadonlyMap<string, { id?: string; cwd?: string }>;
   checkCancellation?: () => void;
+  /** Read through an already validated handle when the caller enforces a filesystem boundary. */
+  readRecords?: (filePath: string) => AsyncIterable<unknown>;
 };
 
 type SessionCandidate = {
@@ -42,6 +44,8 @@ type ParsedToolCall = {
   timestampMs: number;
   timestamp?: string;
 };
+
+const unknownTimestampMs = Number.MAX_SAFE_INTEGER;
 
 type TraceOriginMatchWithTimestamp = TraceOriginMatch & { timestampMs: number };
 
@@ -63,7 +67,7 @@ export async function traceOrigin(
   }
 
   const sessions = await getSessionCandidates(options);
-  const earliest = pickTraceOriginResult(await traceOriginInSessions(sessions, normalizedInputs, options.checkCancellation));
+  const earliest = pickTraceOriginResult(await traceOriginInSessions(sessions, normalizedInputs, options));
 
   if (!earliest) {
     return undefined;
@@ -76,7 +80,7 @@ export async function traceOrigin(
 async function traceOriginInSessions(
   sessions: SessionCandidate[],
   inputs: TraceOriginInput[],
-  checkCancellation?: () => void
+  { checkCancellation, readRecords = parseJsonlFileRecords }: TraceOriginOptions
 ): Promise<TraceOriginScanResult> {
   if (sessions.length === 0 || inputs.length === 0) {
     return {};
@@ -87,7 +91,7 @@ async function traceOriginInSessions(
 
   for (const session of sessions) {
     checkCancellation?.();
-    mergeTraceOriginResult(result, await traceOriginInSession(session, inputs, selectionInputs, checkCancellation));
+    mergeTraceOriginResult(result, await traceOriginInSession(session, inputs, selectionInputs, readRecords, checkCancellation));
   }
 
   return result;
@@ -151,6 +155,7 @@ async function traceOriginInSession(
   session: SessionCandidate,
   inputs: TraceOriginInput[],
   selectionInputs: TraceOriginInput[],
+  readRecords: NonNullable<TraceOriginOptions['readRecords']>,
   checkCancellation?: () => void
 ): Promise<TraceOriginScanResult | undefined> {
   let sessionCwd: string | undefined;
@@ -159,7 +164,7 @@ async function traceOriginInSession(
   const result: TraceOriginScanResult = {};
 
   try {
-    for await (const record of parseJsonlFileRecords(session.path)) {
+    for await (const record of readRecords(session.path)) {
       checkCancellation?.();
       if (!isRecord(record)) {
         continue;
@@ -167,7 +172,7 @@ async function traceOriginInSession(
 
       const recordTimestamp = getRecordTimestamp(record);
 
-      if (Number.isFinite(recordTimestamp.timestampMs) && recordTimestamp.timestampMs > sessionEndedAtMs) {
+      if (recordTimestamp.timestampMs !== unknownTimestampMs && recordTimestamp.timestampMs > sessionEndedAtMs) {
         sessionEndedAtMs = recordTimestamp.timestampMs;
       }
 
@@ -378,11 +383,12 @@ function getRecordTimestamp(record: Record<string, unknown>): { timestampMs: num
   const message = isRecord(record.message) ? record.message : undefined;
   const messageTimestamp = message?.timestamp;
 
-  if (typeof messageTimestamp === 'number' && Number.isFinite(messageTimestamp)) {
-    return { timestampMs: messageTimestamp, timestamp: new Date(messageTimestamp).toISOString() };
+  if (typeof messageTimestamp === 'number') {
+    const date = new Date(messageTimestamp);
+    if (Number.isFinite(date.valueOf())) return { timestampMs: messageTimestamp, timestamp: date.toISOString() };
   }
 
-  return { timestampMs: Number.MAX_SAFE_INTEGER };
+  return { timestampMs: unknownTimestampMs };
 }
 
 function normalizeInput(input: TraceOriginInput): TraceOriginInput | undefined {

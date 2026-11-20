@@ -81,6 +81,8 @@ export class TaurenChatController {
   private readonly postedChatSyncByMessage = new WeakMap<WebviewStateMessage, PostedWebviewChatSync>();
   private lastPostedChatSync: PostedWebviewChatSync | undefined;
   private startupResourcesReloadRevision = 0;
+  private reconnectInFlight: Promise<void> | undefined;
+  private pendingRecoveryClient: AgentClient | undefined;
   private workspaceWaitingNoticeAdded = false;
   private workspaceWarningNoticeAdded = false;
   private authState: WebviewAuthState = { providers: [] };
@@ -245,7 +247,72 @@ export class TaurenChatController {
   }
 
   public async reloadPiResources(options: { announce?: boolean; reloadOpenSessions?: boolean } = {}): Promise<void> {
-    await this.slashCommandController.reloadPiResources(options);
+    if (this.reconnectInFlight) {
+      return this.reconnectInFlight;
+    }
+
+    const client = this.getClient();
+    if (!client.reconnect || (!client.isDisconnected?.() && this.pendingRecoveryClient !== client)) {
+      await this.slashCommandController.reloadPiResources(options);
+      return;
+    }
+
+    this.pendingRecoveryClient = client;
+    const reconnect = client.reconnect.bind(client);
+    const recovery: Promise<void> = Promise.resolve().then(() => this.reconnectSession(
+      reconnect,
+      options.announce ?? true,
+      () => this.reconnectInFlight === recovery
+    ));
+    this.reconnectInFlight = recovery;
+    try {
+      await recovery;
+    } finally {
+      if (this.reconnectInFlight === recovery) {
+        this.reconnectInFlight = undefined;
+      }
+    }
+  }
+
+  private async reconnectSession(reconnect: () => Promise<void>, announce: boolean, isCurrent: () => boolean): Promise<void> {
+    if (!isCurrent()) {
+      return;
+    }
+
+    this.resetReadyScriptArming();
+    this.resetAbortState();
+    this.sessionMetadataRefresh.invalidate();
+    this.sessionHistory.setLoading(true);
+    this.postState();
+
+    try {
+      await reconnect();
+      if (!isCurrent()) {
+        return;
+      }
+      await this.sessionHistory.adoptReplacedSession({ refreshSessions: true });
+      if (!isCurrent()) {
+        return;
+      }
+      this.pendingRecoveryClient = undefined;
+      await this.refreshSlashCommands({ startClient: true, force: true });
+      if (!isCurrent()) {
+        return;
+      }
+      this.startupResourcesReloadRevision += 1;
+      if (announce) {
+        this.session.addSystemMessage('Reconnected to the backend and restored session history. Interrupted work was not replayed.');
+      }
+    } catch (error) {
+      if (isCurrent()) {
+        throw error;
+      }
+    } finally {
+      if (isCurrent()) {
+        this.sessionHistory.setLoading(false);
+        this.postState();
+      }
+    }
   }
 
   public async restartBackendEngine(options: { announce?: boolean; restartOpenSessions?: boolean } = {}): Promise<void> {
@@ -445,7 +512,15 @@ export class TaurenChatController {
     }
 
     if (localSlashCommand) {
-      await this.slashCommandController.handle(localSlashCommand);
+      await this.runLocalSlashCommand(localSlashCommand.name, localSlashCommand.args);
+      return;
+    }
+
+    if (this.reconnectInFlight || this.pendingRecoveryClient) {
+      this.session.addSystemMessage(this.reconnectInFlight
+        ? 'Wait for the backend to reconnect before sending a prompt.'
+        : 'Use /reload to reconnect the backend before sending a prompt.');
+      this.postState();
       return;
     }
 
@@ -519,6 +594,20 @@ export class TaurenChatController {
   public async runLocalSlashCommand(name: string, args = ''): Promise<void> {
     if (this.session.isBusy && name !== 'name') {
       this.addBusySlashCommandNotice(name);
+      return;
+    }
+
+    if (name === 'reload') {
+      try {
+        await this.reloadPiResources();
+      } catch (error) {
+        this.session.addErrorMessage(getErrorMessage(error));
+        this.postState();
+      }
+      return;
+    }
+
+    if ((name === 'login' || name === 'logout') && await this.openCredentialDocumentation()) {
       return;
     }
 
@@ -839,8 +928,28 @@ export class TaurenChatController {
     this.postState();
   }
 
+  private async openCredentialDocumentation(): Promise<boolean> {
+    if (this.getPiStartupCwdState().status !== 'ready') {
+      return false;
+    }
+
+    try {
+      const client = this.getClient();
+      if (!client.openCredentialDocumentation) {
+        return false;
+      }
+      await client.openCredentialDocumentation();
+    } catch (error) {
+      const message = getErrorMessage(error);
+      this.authState = { ...this.authState, error: message };
+      this.options.showNotification(message, 'warning');
+      this.postState();
+    }
+    return true;
+  }
+
   private async loginAuthProvider(providerId: string, authType?: WebviewAuthProvider['authType']): Promise<void> {
-    if (this.authState.busyProviderId || this.session.isBusy) {
+    if (this.authState.busyProviderId || this.session.isBusy || await this.openCredentialDocumentation()) {
       return;
     }
 
@@ -1019,7 +1128,7 @@ export class TaurenChatController {
   }
 
   private async logoutAuthProvider(providerId: string): Promise<void> {
-    if (this.authState.busyProviderId) {
+    if (this.authState.busyProviderId || await this.openCredentialDocumentation()) {
       return;
     }
 
@@ -1401,6 +1510,11 @@ export class TaurenChatController {
   }
 
   private prepareForClientDispose(): void {
+    this.pendingRecoveryClient = undefined;
+    if (this.reconnectInFlight) {
+      this.reconnectInFlight = undefined;
+      this.sessionHistory.setLoading(false);
+    }
     this.resetReadyScriptArming();
   }
 

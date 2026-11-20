@@ -21,7 +21,7 @@ const save = () => {
   fs.writeFileSync(temporary, JSON.stringify(state)); fs.renameSync(temporary, file);
 };
 const fail = text => { process.stderr.write(text); process.exitCode = 23; };
-const operation = executable === 'transport' ? (args.at(-1) === 'command -v node' ? 'probe' : 'transport') : args.find(x => ['--version', 'ls', 'inspect', 'create'].includes(x));
+const operation = executable === 'transport' ? (args.at(-1)?.endsWith('else command -v node; fi') ? 'probe' : 'transport') : args.find(x => ['--version', 'ls', 'inspect', 'create'].includes(x));
 if (state.hang === operation) { setInterval(() => {}, 1000); }
 else if (operation === '--version') console.log(state.version || 'sbx version 0.51.3');
 else if (operation === 'ls') console.log(state.listOutput === undefined ? JSON.stringify(state.sandbox ? [{ name: state.sandbox.name }] : []) : state.listOutput);
@@ -33,7 +33,6 @@ else if (operation === 'inspect') {
   state.sandbox = { name, workspace: state.workspace, status: 'stopped' };
   save(); console.log('creation is not a readiness signal');
 } else if (operation === 'probe') {
-  if (args.at(-1) !== 'command -v node') throw Error('unexpected SSH command');
   state.probes = (state.probes || 0) + 1;
   if (state.sandbox) state.sandbox.status = 'running'; // SSH auto-starts stopped VMs.
   save();
@@ -218,6 +217,21 @@ suite('sbx lifecycle', function () {
     await assert.rejects(new SandboxLifecycle(options).open(), failure('incompatible', /another workspace/));
     assert.equal(providerCalls, 0); assert.equal((await launches()).length, 0);
     assert.equal(commands.some(command => command.executable === process.execPath), false);
+  });
+
+  test('rejects a clone provider before creation', async () => {
+    options.commandProvider = async () => ({ version: 1, argv: ['sbx', 'create', '--clone', 'fixture-kit'] });
+    await assert.rejects(new SandboxLifecycle(options).open(), /Remove --clone/);
+    assert.equal(commands.some(command => command.args.includes('create')), false);
+    await assert.rejects(stat(sessionDirectory()), { code: 'ENOENT' });
+  });
+
+  test('rejects a detected private clone before initialize', async () => {
+    await existing();
+    options.runCommand = (command, limits) => command.args.at(-1)?.includes('/run/sandbox/source')
+      ? Promise.resolve({ stdout: 'tauren:clone\n', stderr: '' }) : run(command, limits);
+    await assert.rejects(new SandboxLifecycle(options).open(), failure('incompatible', /private clone/));
+    assert.equal(connections.length, 0);
   });
 
   test('untrusted absent workspace cannot invoke provider or mutate storage', async () => {
@@ -428,8 +442,10 @@ suite('sbx lifecycle', function () {
       options.timeouts!.handshake = mode === 'timeout' ? 500 : 2000;
       const opening = new SandboxLifecycle(options).open(controller.signal);
       const rejected = assert.rejects(opening, failure(mode, mode === 'timeout' ? /handshake timed out/ : /cancelled/));
-      await entered.promise;
-      if (mode === 'cancelled') controller.abort();
+      if (mode === 'cancelled') {
+        await Promise.race([entered.promise, rejected]);
+        controller.abort();
+      }
       await rejected;
       await assertChildrenStopped(); assertNoDestructiveCommands();
     });

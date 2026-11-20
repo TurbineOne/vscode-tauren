@@ -9,19 +9,37 @@ history and handling user interactions. This document explains how the adapter
 preserves that division when starting sessions, handling failures, and presenting
 Pi extension UI.
 
-The adapter is implemented internally, but users cannot select it yet because
-backend settings and client creation are not connected to it. It uses the
+Select **Docker Sandboxes** in Tauren’s Runtime settings to use this adapter. It uses the
 existing `SandboxLifecycle` service and its concrete per-client SSH connection,
 rather than introducing another transport implementation. For details of sandbox
 creation and the server connection, see
 [Sandbox lifecycle and SSH transport](./sbx-lifecycle.md).
 
+## Configuring Docker Sandboxes
+
+Open a trusted local workspace and select **Docker Sandboxes** in Tauren’s
+Runtime settings, or set `tauren.backend` to `sbx` in VS Code. Install the SBX CLI
+and OpenSSH on the machine running the extension host, then run `sbx login` and
+`sbx setup ssh` there. The backend remains experimental because the production
+inspection schema and packaged flow have not been verified.
+
+The bundled Pi kit is used unless `tauren.sbx.commandProvider` supplies an
+`executable` and an `args` array. See the [provider contract](./sbx-command-provider.md)
+for an example. `tauren.sbx.storageRoot` defaults to `~/.tauren`, and an empty
+`tauren.sbx.sandboxName` derives the name from the canonical workspace basename.
+The Session List Lane and Trace Origin read only the configured sandbox store
+and associated workspace. They do not start a VM or fall back to the local Pi store.
+
+After a disconnect, use `/reload` to reconnect and restore persisted history.
+Tauren does not replay interrupted prompts. The **Tauren Docker Sandboxes**
+Output channel receives informational diagnostics when the backend reports them.
+
 ## Starting a session and making requests
 
 The adapter opens one server connection when it first needs to make a request,
-so constructing a client does not immediately start a server. If several calls
-arrive during startup, they wait for the same initialization promise instead of
-opening competing connections. Before initialization begins, the adapter uses
+so constructing a client does not immediately start a server. Each conversation
+has its own client. When its metadata refresh asks for state, models, and
+resources concurrently, those calls wait for that client’s one startup promise. Before initialization begins, the adapter uses
 `configureConnection` to install event handlers and the extension UI bridge.
 This ordering matters because Pi extensions can request user interaction during
 their `session_start` handlers, before initialization has returned.
@@ -128,10 +146,9 @@ the host file, not a remote file that the caller might be unable to open.
 Imports currently require a path that the sandbox can read, rather than
 performing the reverse of the export transfer. The adapter sends the import path
 to the server without uploading the file. Callers must therefore ensure that the
-file is visible inside the sandbox before requesting an import. The broader
-file-access integration still needs review, particularly for clone-mode
-workspaces, where host edits do not automatically appear in the sandbox's
-separate copy.
+file is visible inside the sandbox before requesting an import. Tauren requires
+a direct workspace mount, so files in the mounted project are visible to both
+sides. Tauren does not upload files from elsewhere on the host.
 
 ## Configuring credentials
 
@@ -145,8 +162,9 @@ follow the Docker Sandboxes guidance rather than expecting these methods to
 update sandbox credentials.
 
 The host must present that guidance because the adapter itself does not depend
-on VS Code or open a popup. When this backend is connected to Tauren's settings,
-the integration must supply the callback that makes the guidance visible. To
+on VS Code or open a popup. `createSbxExtensionClient()` supplies a VS Code
+notification with a documentation button. The Login settings show guidance
+instead of credential-entry controls. To
 report whether a provider is ready, the adapter uses sanitized server results
 rather than reading credentials from the host.
 
@@ -243,6 +261,6 @@ do not exercise the complete deployed environment. Production SBX inspection
 compatibility remains the verification gap described in
 [Sandbox lifecycle and SSH transport](./sbx-lifecycle.md). Packaged end-to-end
 behavior and VS Code layout and interaction also require separate verification,
-including Extension Host and manual checks when backend selection is integrated.
+including Extension Host and manual checks.
 Passing the focused suite should not be treated as evidence that those remaining
 checks have passed.

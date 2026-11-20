@@ -5,13 +5,10 @@ This document maps how conversation content, native session views and Pi extensi
 UI reach that UI, and how user actions return to Pi. It covers the sandbox adapter
 and the existing host/browser rendering code that consumes `AgentClient`.
 
-**The sandbox adapter is implemented, but users cannot select it through the
-backend settings yet.** The sandbox-to-adapter paths below are exercised by tests.
-The continuation from `AgentClient` through Tauren's session manager and webview
-is the existing native rendering path, not a claim that sandbox selection is
-already connected in the production UI. Kward-specific surfaces are outside this
-Pi rendering map. Session discovery and some host-file
-operations still need sandbox-specific integration, called out where relevant.
+Select **Docker Sandboxes** in Tauren’s Runtime settings to use these paths.
+The backend requires a directly mounted local workspace. The real-SBX inspection
+schema and packaged end-to-end flow still need verification. Kward-specific
+surfaces are outside this Pi rendering map.
 
 ## Boundaries and notation
 
@@ -87,9 +84,8 @@ blocks, so the renderer can display images without rebuilding the component
 tree on the host. The sandbox sends the render data that the proxy caches.
 
 Other shared helpers also serve the in-process SDK backend, where there is no
-SSH boundary. The production
-`createConfiguredAgentClient()` function selects `PiSdkClient` or `KwardClient`,
-not `SbxClient`. The in-process Pi path joins the same host rendering code:
+SSH boundary. `createConfiguredAgentClient()` selects `PiSdkClient`, `KwardClient`,
+or `SbxClient` according to the configured backend. The in-process Pi path joins the same host rendering code:
 
 ```text
 Host PiSdkClient.bindRuntime() → SDK AgentSession.subscribe() callback
@@ -531,17 +527,16 @@ a command, model or message to that state.
 
 ### 17. Session List Lane, search and selection
 
-Session-list rendering currently reads host-side session discovery, not the
-sandbox's `sessions.list` method. This distinction matters because rendering the
-lane is implemented, but selecting an SBX store instead of the local Pi store
-still requires integration. `SbxClient` does not currently expose the server's
-list or origin-tracing operations.
+Session discovery reads Pi’s persisted files on the host, so the list can load
+without starting a VM. With SBX selected, Tauren scans only the resolved sandbox
+store and checks the workspace in each session header. It never falls back to
+the local Pi store.
 
 ```text
 Browser /resume or lane action → host command routing
   → host SessionViewController.showSessions() → refreshSessionsNow()
   → TaurenChatViewProvider.listSessionsWithPerf()
-  → functions listAgentSessions() → listPiSessions() [host filesystem]
+  → functions listAgentSessions() → listSbxSessions() [scoped host store]
   → rows, current-session identity and search state → published webview state
 Browser SessionViewController.renderSessions() → Session List Lane DOM
   → user selects row ── selectSession ──► TaurenSessionManager.handleWebviewMessage()
@@ -633,9 +628,9 @@ Sandbox registerSessionControls handlers ◄── session.getForkMessages / ses
 ```
 
 List-item actions can use a temporary client via `withSessionClient()` rather than
-the active conversation's client. That factory must also select SBX before this is
-a supported production sandbox workflow. Import paths must be visible inside the
-sandbox; a host file picker alone does not transfer a file.
+the active conversation’s client. Both use the configured backend factory. Import
+paths must be visible inside the sandbox; a host file picker alone does not
+transfer a file.
 
 ### 21. Compaction and summaries
 
@@ -726,11 +721,9 @@ Host SbxClient.loginWithApiKey() / loginWithOAuth() / logoutAuthProvider()
   → supplied showCredentialDocumentation(url) callback; no credential RPC
 ```
 
-The adapter's credential methods never forward keys or OAuth callbacks. The
-production controller still has a general credential-entry flow that can ask for
-a secret before invoking a client, so presenting SBX guidance before that prompt
-remains part of backend UI integration. Do not describe the current Settings Face
-as an already-wired sandbox credential popup.
+With SBX selected, the Login settings show provider readiness and a link to
+Docker’s credential documentation. The controller also checks for the client’s
+guidance method before requesting any API key or starting OAuth.
 
 ### 25. Composer suggestions and application
 
@@ -764,8 +757,10 @@ looks up local files on the host without calling the sandbox.
 
 Session Changes currently combines host workspace reads with session-specific
 snapshots and recorded tool edits. It is not a remote-rendered Pi TUI and is not
-implemented by substituting Git diff. Sandbox-only and clone-mode paths still need
-an explicit host-file integration audit before they can be treated as local files.
+implemented by substituting Git diff. Tauren requires a direct workspace mount
+so host snapshots and sandbox edits refer to the same files. It rejects new
+`--clone` commands and sandbox paths outside the mounted workspace are not
+opened as host file references.
 
 ```text
 Sandbox tool edit/write data ── agent.event ──► host tool activity/session tracking

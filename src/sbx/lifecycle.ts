@@ -151,13 +151,19 @@ export class SandboxLifecycle {
   private async waitForSsh(name: string, run: CommandRunner, signal?: AbortSignal): Promise<string> {
     const deadline = Date.now() + (this.options.timeouts?.startup ?? 30_000);
     let last: unknown;
+    // SBX exposes the host source separately in clone mode. Detect that layout
+    // before launching Pi with a host path or enabling host-backed file views.
+    const probe = 'if [ -d /run/sandbox/source ]; then printf "tauren:clone\\n"; else command -v node; fi';
     do {
       throwIfCancelled(signal);
       try {
         const result = await run({ executable: this.options.sshExecutable ?? 'ssh', args: [
-          ...(this.options.sshArgs ?? []), ...buildSshArguments(name, 'command -v node', Math.max(1, deadline - Date.now()))
+          ...(this.options.sshArgs ?? []), ...buildSshArguments(name, probe, Math.max(1, deadline - Date.now()))
         ] }, { timeoutMs: Math.max(1, deadline - Date.now()), signal });
         const node = result.stdout.trim();
+        if (node === 'tauren:clone') {
+          throw new SandboxLifecycleError('incompatible', 'This sandbox uses a private clone. Select or create a sandbox with a direct workspace mount.');
+        }
         if (!path.posix.isAbsolute(node) || node.includes('\n') || node.includes('\r') || node.includes('\0')) {
           throw new SandboxLifecycleError('incompatible', 'Sandbox Node executable must resolve to one absolute POSIX path');
         }

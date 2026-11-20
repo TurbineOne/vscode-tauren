@@ -1,5 +1,6 @@
 import { listKwardSessionCandidates } from '../kward/sessionList';
-import { listPiSessionCandidates } from '../sessions/piSessionList';
+import type { AgentSessionBackend } from '../sessions/agentSessionList';
+import { discoverSbxSessionFiles, listPiSessionCandidates, type SbxSessionScope } from '../sessions/piSessionList';
 import {
   traceOrigin as scanSessionOrigins,
   type TraceOriginInput,
@@ -8,8 +9,8 @@ import {
 
 export type { TraceOriginInput, TraceOriginMatch } from '@tauren/shared/sessions/sessionOriginTracer';
 
-export type TraceOriginOptions = {
-  backend?: 'pi' | 'kward';
+export type TraceOriginOptions = SbxSessionScope & {
+  backend?: AgentSessionBackend;
   cwd?: string;
   currentSessionFile?: string;
   kwardPath?: string;
@@ -29,6 +30,10 @@ export async function traceOrigin(
   // Preserve the no-discovery fast path for empty or invalid inputs.
   if (!inputs.some((input) => input.path.trim() && (input.kind !== 'selection' || input.text?.trim()))) {
     return undefined;
+  }
+
+  if (options.backend === 'sbx') {
+    return scanSessionOrigins(inputs, await discoverSbxSessionFiles(options, options.sessionFiles));
   }
 
   const sessions = await getSessionCandidates(options);

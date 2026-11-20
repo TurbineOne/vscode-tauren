@@ -200,14 +200,18 @@ Implemented the injectable lifecycle and per-client framed transport under `src/
 - ~~Preserve session-manager retention behavior and restore transcripts from Pi `getMessages()` after reconnecting. Do not treat cached transcript state as persisted truth or transparently replay interrupted work.~~
 - ~~**Test gate:** adapter contract tests use a fixture server for protocol failures and the real standalone server for SDK behavior. Verify event normalization, bidirectional UI, session restore, multiple clients, disconnect recovery, and disposal without requiring VS Code to launch an actual sandbox.~~
 
-`src/sbx/sbxClient.ts` now implements the normalized AgentClient contract over the concrete lifecycle/SSH service. `src/sbx/clientValidation.ts` validates response/event DTOs; `src/extensionUi/sbxExtensionUi.ts` hosts reverse dialogs and remote-rendered surfaces through existing Tauren UI hosts. Tests exercise the real standalone SDK server with offline extensions and a fixture executable, plus malformed protocol/disconnect cases. Explicit reconnect restores Pi history without replaying prompts; auth entrypoints show SBX guidance and never send credentials. See [adapter ownership and verification](../development/sbx-client.md). Backend selection, the real VS Code credential popup, discovery and clone/file-path integration remain step 11; real-SBX and Extension Host/manual parity claims remain outstanding.
+`src/sbx/sbxClient.ts` now implements the normalized AgentClient contract over the concrete lifecycle/SSH service. `src/sbx/clientValidation.ts` validates response/event DTOs; `src/extensionUi/sbxExtensionUi.ts` hosts reverse dialogs and remote-rendered surfaces through existing Tauren UI hosts. Tests exercise the real standalone SDK server with offline extensions and a fixture executable, plus malformed protocol/disconnect cases. Explicit reconnect restores Pi history without replaying prompts; auth entrypoints show SBX guidance and never send credentials. See [adapter ownership and verification](../development/sbx-client.md). The next step wires this adapter into VS Code. The adapter tests do not establish real-SBX or Extension Host parity.
 
-### 11. Wire settings, session discovery, and extension behavior
+### ~~11. Wire settings, session discovery, and extension behavior~~ — Completed
 
-- Add the `Docker Sandboxes` backend choice, command-provider configuration, storage root, and sandbox-name override to `package.json`, the settings registry/readers, and backend factory. Keep `src/extension.ts` a thin activation shell.
-- Extend session listing and origin discovery (`src/sessions/agentSessionList.ts`, `src/sessions/piSessionList.ts`, and `src/origin/sessionOriginTracer.ts`) to use the effective SBX session directory instead of falling back to the local Pi store. Ensure temporary session-action clients use the SBX factory too.
-- Integrate connection/error states, prerequisite guidance, and credential documentation links into existing surfaces. Audit diff tracking, file access/highlighting, export paths, and other host filesystem assumptions for sandbox paths, including any supported clone-mode behavior. Preserve session-specific diff baselines rather than substituting git diff.
-- **Test gate:** VS Code tests cover configuration/factory selection, session listing and origin lookup, background sessions, transcript restore, and credential flows. Regress the SDK and Kward backends; manually verify the Session List Lane, Session Tree Lane, tool rendering, extension UI, and Session Changes in the Extension Host.
+- ~~Add the `Docker Sandboxes` backend choice, command-provider configuration, storage root, and sandbox-name override to `package.json`, the settings registry/readers, and backend factory. Keep `src/extension.ts` a thin activation shell.~~
+- ~~Extend session listing and origin discovery (`src/sessions/agentSessionList.ts`, `src/sessions/piSessionList.ts`, and `src/origin/sessionOriginTracer.ts`) to use the effective SBX session directory instead of falling back to the local Pi store. Ensure temporary session-action clients use the SBX factory too.~~
+- ~~Integrate connection/error states, prerequisite guidance, and credential documentation links into existing surfaces. Audit diff tracking, file access/highlighting, export paths, and other host filesystem assumptions for sandbox paths, including any supported clone-mode behavior. Preserve session-specific diff baselines rather than substituting git diff.~~
+- ~~**Test gate:** VS Code tests cover configuration/factory selection, session listing and origin lookup, background sessions, transcript restore, and credential flows. Regress the SDK and Kward backends; manually verify the Session List Lane, Session Tree Lane, tool rendering, extension UI, and Session Changes in the Extension Host.~~
+
+The **Docker Sandboxes** setting now selects `SbxClient` through the same factory for live conversations and temporary session actions. Host discovery uses the resolved sandbox store and checks each session’s workspace. `/reload` reconnects a disconnected client and restores Pi history without replaying prompts. The Login settings and credential actions direct users to Docker’s documentation instead of requesting secrets. Tauren requires a direct mount so its file views and session-specific diffs refer to the files Pi edits. See [SBX configuration and operation](../development/sbx-client.md#configuring-docker-sandboxes).
+
+The focused tests use local fixtures. Extension Host execution was blocked by a missing `libglib-2.0.so.0`; manual UI checks and the real-SBX inspection schema are still unverified.
 
 ### 12. Validate the packaged end-to-end flow and document operation
 
@@ -230,7 +234,7 @@ Implemented the injectable lifecycle and per-client framed transport under `src/
 
 ### Negative
 
-- The direct workspace mount has no file boundary. It matches today's host SDK, but it is weaker than `--clone`. A command provider may request `--clone` for the Git workspace. That choice does not protect the session store.
+- The direct workspace mount has no file boundary. It matches today's host SDK, but it is weaker than `--clone`. Tauren requires a direct mount because its host file and diff views depend on both sides seeing the same worktree. The VS Code integration rejects `--clone`; it does not map a private sandbox worktree back to host files.
 - SSH setup is experimental and requires an active Docker login.
 - Active Pi execution does not survive loss of its SSH connection. Reconnection restores persisted history, not an interrupted turn.
 - Credential entry moves out of Tauren, and undeclared providers do not work.

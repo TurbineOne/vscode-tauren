@@ -1,12 +1,12 @@
 import { getKwardPathSetting } from '../settings/taurenSettings';
 import type { WebviewSessionItem } from '../webviewProtocol/types';
 import { listKwardSessions } from '../kward/sessionList';
-import { listPiSessions } from './piSessionList';
+import { listPiSessions, listSbxSessions, type SbxSessionScope } from './piSessionList';
 import type { SessionListLoadMetrics } from './types';
 
-export type AgentSessionBackend = 'pi' | 'kward';
+export type AgentSessionBackend = 'pi' | 'kward' | 'sbx';
 
-export type ListAgentSessionsOptions = {
+export type ListAgentSessionsOptions = SbxSessionScope & {
   backend: AgentSessionBackend;
   cwd?: string;
   currentSessionFile?: string;
@@ -27,6 +27,10 @@ export function listAgentSessions(options: ListAgentSessionsOptions): Promise<We
         previousSessions: options.previousSessions
       }
     });
+  }
+
+  if (options.backend === 'sbx') {
+    return listSbxSessions(options);
   }
 
   return listPiSessions({

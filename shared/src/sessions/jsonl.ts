@@ -1,9 +1,13 @@
 import { createReadStream } from 'node:fs';
 
 export async function* parseJsonlFileRecords(filePath: string): AsyncGenerator<unknown> {
+  yield* parseJsonlRecords(createReadStream(filePath, { encoding: 'utf8' }));
+}
+
+export async function* parseJsonlRecords(chunks: AsyncIterable<string>): AsyncGenerator<unknown> {
   let buffer = '';
 
-  for await (const chunk of createReadStream(filePath, { encoding: 'utf8' })) {
+  for await (const chunk of chunks) {
     buffer += chunk;
 
     for (;;) {

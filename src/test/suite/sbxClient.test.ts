@@ -88,7 +88,7 @@ async function createFixture(mode = 'real') {
     timeouts: { startup: 10_000, handshake: 15_000, shutdown: 500, command: 2000 },
     runCommand: async command => {
       commands.push(command.args);
-      if (command.args.at(-1) === 'command -v node') return { stdout: process.execPath, stderr: '' };
+      if (command.args.at(-1)?.endsWith('else command -v node; fi')) return { stdout: process.execPath, stderr: '' };
       if (command.args[0] === '--version') return { stdout: 'sbx 0.51.3', stderr: '' };
       if (command.args[0] === 'ls') return { stdout: JSON.stringify([{ name: 'sbx-client-fixture' }]), stderr: '' };
       if (command.args[0] === 'inspect') return { stdout: JSON.stringify({ name: 'sbx-client-fixture', workspace }), stderr: '' };

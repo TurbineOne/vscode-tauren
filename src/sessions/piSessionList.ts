@@ -1,7 +1,8 @@
-import { existsSync, type Stats } from 'fs';
-import { readdir, readFile, stat } from 'fs/promises';
+import { constants, existsSync, type Stats } from 'fs';
+import { lstat, open, readdir, readFile, realpath, stat, type FileHandle } from 'fs/promises';
 import { homedir } from 'os';
-import { dirname, isAbsolute, join, resolve } from 'path';
+import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'path';
+import { parseJsonlRecords } from '@tauren/shared/sessions/jsonl';
 import { readSessionJsonlHeader } from '../pi/sessionJsonl';
 import { readSessionMetadataCache, writeSessionMetadataCache, type CachedSessionInfo } from './sessionMetadataCache';
 import { readSessionSummary } from '@tauren/shared/sessions/sessionSummaryParser';
@@ -14,6 +15,22 @@ export type { ListPiSessionsOptions, PiSessionCandidate, SessionListItem } from 
 const piSessionDirEnvName = 'PI_CODING_AGENT_SESSION_DIR';
 const maxConcurrentSessionFileReads = 8;
 const sessionListProgressBatchSize = 50;
+const maxSbxHeaderBytes = 64 * 1024;
+
+export type SbxSessionScope = {
+  /** Canonical absolute paths returned by the provider's SBX path resolver. */
+  sbxSessionStore?: string;
+  sbxWorkspace?: string;
+};
+
+type SbxSessionListOptions = SbxSessionScope & Pick<
+  ListPiSessionsOptions, 'currentSessionFile' | 'onProgress' | 'onMetrics'
+>;
+
+type SbxSessionFile = SessionFileStats & {
+  handle: FileHandle;
+  workspace: string;
+};
 
 type SessionFileStats = {
   path: string;
@@ -40,6 +57,127 @@ export async function listPiSessionCandidates(options: ListPiSessionsOptions = {
     ?? await resolveConfiguredSessionDir(options.cwd, options.currentSessionFile, env);
 
   return sessionDir ? listSessionCandidatesFromDir(sessionDir) : [];
+}
+
+export async function listSbxSessions(options: SbxSessionListOptions): Promise<SessionListItem[]> {
+  const { sessionFiles, openFile } = await resolveSbxSessionFiles(options);
+  const entries = await mapWithConcurrency(sessionFiles, maxConcurrentSessionFileReads, async (path) => {
+    const file = await openFile(path);
+    if (!file) return undefined;
+
+    try {
+      const summary = await readSessionSummary(file.path, file.stats, streamSbxSession(file));
+      if (!summary || !await matchesWorkspace(summary.cwd, file.workspace)) return undefined;
+      return { session: markSessionMetadataReady({ ...summary, cwd: file.workspace }), bytes: file.stats.size };
+    } catch {
+      return undefined;
+    } finally {
+      await file.handle.close();
+    }
+  });
+  const ready = entries.filter((entry) => entry !== undefined);
+  const sessions = decorateSessions(ready.map(({ session }) => session), options.currentSessionFile);
+  if (sessions.length) options.onProgress?.(sessions);
+  options.onMetrics?.({
+    sessionCount: sessions.length,
+    totalBytes: ready.reduce((total, { bytes }) => total + bytes, 0),
+    cacheHits: 0,
+    cacheMisses: sessions.length
+  });
+  return sessions;
+}
+
+export async function discoverSbxSessionFiles(options: SbxSessionScope, explicitFiles?: string[]) {
+  const { sessionFiles, openFile } = await resolveSbxSessionFiles(options, explicitFiles);
+  return {
+    sessionFiles,
+    async *readRecords(path: string): AsyncGenerator<unknown> {
+      const file = await openFile(path);
+      if (!file) return;
+
+      try {
+        let first = true;
+        for await (const record of parseJsonlRecords(streamSbxSession(file))) {
+          if (first) {
+            first = false;
+            if (!isRecord(record) || record.type !== 'session' || typeof record.id !== 'string'
+              || !await matchesWorkspace(record.cwd, file.workspace)) return;
+            yield { ...record, cwd: file.workspace };
+          } else {
+            // A second header must not change the workspace during a scan.
+            if (isRecord(record) && record.type === 'session') continue;
+            yield record;
+          }
+        }
+      } finally {
+        await file.handle.close();
+      }
+    }
+  };
+}
+
+async function resolveSbxSessionFiles(options: SbxSessionScope, explicitFiles?: string[]) {
+  const { sbxSessionStore: store, sbxWorkspace: workspace } = options;
+  if (store && workspace && isAbsolute(store) && isAbsolute(workspace)) {
+    const fromWorkspace = relative(workspace, store);
+    if (fromWorkspace === '..' || fromWorkspace.startsWith(`..${sep}`) || isAbsolute(fromWorkspace)) {
+      try {
+        if (await isCanonicalDirectory(store) && await isCanonicalDirectory(workspace)) {
+          const files = explicitFiles ?? (await readdir(store)).map((name) => join(store, name));
+          return {
+            sessionFiles: files.filter((path) => resolve(path) === path && dirname(path) === store && extname(path) === '.jsonl'),
+            openFile: (path: string) => openSbxSessionFile(path, store, workspace)
+          };
+        }
+      } catch {
+        // A missing or inaccessible SBX store never triggers local Pi discovery.
+      }
+    }
+  }
+  return { sessionFiles: [], openFile: async (_path: string) => undefined };
+}
+
+async function isCanonicalDirectory(path: string): Promise<boolean> {
+  return await realpath(path) === path && (await lstat(path)).isDirectory();
+}
+
+async function openSbxSessionFile(path: string, store: string, workspace: string): Promise<SbxSessionFile | undefined> {
+  let handle: FileHandle | undefined;
+  try {
+    // O_NOFOLLOW rejects a final-component symlink even if the entry changes
+    // after enumeration. O_NONBLOCK keeps replaced FIFOs from blocking discovery.
+    if (!await isCanonicalDirectory(store)) return undefined;
+    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const stats = await handle.stat();
+    if (!stats.isFile() || await realpath(path) !== path) return undefined;
+    const current = await lstat(path);
+    if (!current.isFile() || stats.dev !== current.dev || stats.ino !== current.ino) return undefined;
+
+    const buffer = Buffer.alloc(Math.min(stats.size, maxSbxHeaderBytes));
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    const newline = buffer.subarray(0, bytesRead).indexOf(0x0a);
+    if (newline === -1 && bytesRead >= maxSbxHeaderBytes) return undefined;
+    const header: unknown = JSON.parse(buffer.toString('utf8', 0, newline === -1 ? bytesRead : newline));
+    if (!isRecord(header) || header.type !== 'session' || typeof header.id !== 'string'
+      || !await matchesWorkspace(header.cwd, workspace)) return undefined;
+
+    const file = { path, stats, handle, workspace };
+    handle = undefined;
+    return file;
+  } catch {
+    return undefined;
+  } finally {
+    await handle?.close();
+  }
+}
+
+async function matchesWorkspace(value: unknown, workspace: string): Promise<boolean> {
+  return typeof value === 'string' && isAbsolute(value)
+    && await realpath(value) === workspace && await isCanonicalDirectory(workspace);
+}
+
+function streamSbxSession({ handle }: SbxSessionFile) {
+  return handle.createReadStream({ encoding: 'utf8', start: 0, autoClose: false });
 }
 
 async function listSessionsFromDir(sessionDir: string, options: ListPiSessionsOptions): Promise<RawSessionInfo[]> {

@@ -81,8 +81,8 @@ backend-specific behavior remain local. Do not copy helpers between projects. Th
 The sketch below shows the SBX UI path. The standalone server side is implemented;
 the concrete per-client SSH transport and lifecycle service are implemented,
 with the real-SBX inspection schema still an explicit verification gap (see
-[Sandbox lifecycle](./sbx-lifecycle.md)). The Tauren SBX host adapter is implemented internally (see
-[Sandbox AgentClient adapter](./sbx-client.md)); backend selection is not yet wired. The existing
+[Sandbox lifecycle](./sbx-lifecycle.md)). The **Docker Sandboxes** backend selection uses the
+[Sandbox AgentClient adapter](./sbx-client.md). The existing
 in-process Pi backend continues to render without crossing a sandbox boundary.
 
 ```text

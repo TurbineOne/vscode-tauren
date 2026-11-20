@@ -17,7 +17,7 @@ const valueOptions = new Map([
   ['--publish', '--publish'], ['-p', '--publish'], ['--cpus', '--cpus'],
   ['--memory', '--memory'], ['-m', '--memory']
 ]);
-const booleanOptions = new Map([['--clone', '--clone'], ['--detach', '--detach'], ['-d', '--detach']]);
+const booleanOptions = new Map([['--detach', '--detach'], ['-d', '--detach']]);
 const repeatable = new Set(['--kit', '--env', '--publish']);
 
 /** Lexical containment for canonical absolute host/VM paths. */
@@ -78,6 +78,9 @@ export async function composeSandboxCommand(response: CommandProviderResult, con
       seen.add('--no-input'); continue;
     }
     if (!token.startsWith('-')) { positionals.push(token); continue; }
+    if (token === '--clone') {
+      throw new Error('Tauren requires a direct workspace mount for Docker Sandboxes. Remove --clone from the command provider.');
+    }
     const option = valueOptions.get(token) ?? booleanOptions.get(token);
     if (!option) throw new Error(`Unsupported SBX provider option: ${token}`);
     if (seen.has(option) && !repeatable.has(option)) throw new Error(`Repeated SBX provider option: ${option}`);

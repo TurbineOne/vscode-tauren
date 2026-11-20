@@ -65,7 +65,6 @@ separate-token options:
 | `--publish`, `-p` | SBX port specification | Yes |
 | `--cpus` | nonnegative integer | No |
 | `--memory`, `-m` | integer, optional k/m/g/t suffix | No |
-| `--clone` | none | No |
 | `--detach`, `-d` | none; run only and required | No |
 
 Aliases count as the same option for duplicate checks. Unknown flags, short flag

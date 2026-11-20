@@ -50,10 +50,10 @@ suite('sbx command composition', () => {
 
   test('preserves option/value pairs and order even when options follow positionals', async () => {
     assert.deepStrictEqual(await compose('sbx', 'create', kit, extra, '--env', 'MODE=two words',
-      '--publish', '8080:80', '--cpus', '2', '--clone', '--memory', '4G', '--no-input'), {
+      '--publish', '8080:80', '--cpus', '2', '--memory', '4G', '--no-input'), {
       executable: 'sbx',
       args: ['--no-input', 'create', '--env', 'MODE=two words', '--publish', '8080:80',
-        '--cpus', '2', '--clone', '--memory', '4G', ...ownedArgs(), kit,
+        '--cpus', '2', '--memory', '4G', ...ownedArgs(), kit,
         config.workspace, config.sessionDirectory, extra]
     });
   });
@@ -106,7 +106,6 @@ suite('sbx command composition', () => {
     ['name', 'create', ['--name', 'tauren-test-1', '--name', 'tauren-test-1']],
     ['detach aliases', 'run', ['-d', '--detach']],
     ['memory aliases', 'create', ['-m', '1g', '--memory', '2g']],
-    ['clone', 'create', ['--clone', '--clone']],
     ['CPU count', 'create', ['--cpus', '1', '--cpus', '2']],
     ['no-input', 'create', ['--no-input', '--no-input']]
   ] as const) {
@@ -247,7 +246,7 @@ suite('sbx command composition', () => {
   for (const option of ['--name', '--kit', '--env', '-e', '--publish', '-p', '--cpus', '--memory', '-m']) {
     test(`rejects missing or flag-shaped value for ${option}`, async () => {
       await assert.rejects(compose('sbx', 'create', kit, option), /Missing value/);
-      await assert.rejects(compose('sbx', 'create', kit, option, '--clone'), /Missing value/);
+      await assert.rejects(compose('sbx', 'create', kit, option, '--no-input'), /Missing value/);
     });
   }
 
