@@ -4,7 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { SbxClient, SBX_CREDENTIAL_DOCUMENTATION, type SbxClientOptions } from '../../sbx/sbxClient';
-import type { SandboxLifecycleOptions } from '../../sbx/lifecycle';
+import { SBX_READINESS_COMMAND, type SandboxLifecycleOptions } from '../../sbx/lifecycle';
 import type { PiEvent, PiOAuthLoginCallbacks } from '../../pi/types';
 import type { MessageConnection } from '@tauren/shared/sbx/protocol';
 import { createCancellingExtensionUi } from '../../extensionUi/types';
@@ -88,7 +88,7 @@ async function createFixture(mode = 'real') {
     timeouts: { startup: 10_000, handshake: 15_000, shutdown: 500, command: 2000 },
     runCommand: async command => {
       commands.push(command.args);
-      if (command.args.at(-1)?.endsWith('else command -v node; fi')) return { stdout: process.execPath, stderr: '' };
+      if (command.args.at(-1) === SBX_READINESS_COMMAND) return { stdout: process.execPath, stderr: '' };
       if (command.args[0] === '--version') return { stdout: 'sbx 0.51.3', stderr: '' };
       if (command.args[0] === 'ls') return { stdout: JSON.stringify([{ name: 'sbx-client-fixture' }]), stderr: '' };
       if (command.args[0] === 'inspect') return { stdout: JSON.stringify({ name: 'sbx-client-fixture', workspace }), stderr: '' };

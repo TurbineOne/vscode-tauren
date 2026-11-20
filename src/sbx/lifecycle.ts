@@ -10,6 +10,9 @@ import { buildSshArguments, SbxSshTransport } from './sshTransport';
 import { SbxControl } from './sbxControl';
 
 export { SandboxLifecycleError } from './process';
+
+/** Check for SBX's private clone layout before resolving Node on the remote PATH. */
+export const SBX_READINESS_COMMAND = 'if [ -d /run/sandbox/source ]; then printf "tauren:clone\\n"; else command -v node; fi';
 export interface SandboxLifecycleOptions extends SandboxPathOptions {
   extensionDirectory: string;
   workspaceTrusted: boolean;
@@ -151,14 +154,11 @@ export class SandboxLifecycle {
   private async waitForSsh(name: string, run: CommandRunner, signal?: AbortSignal): Promise<string> {
     const deadline = Date.now() + (this.options.timeouts?.startup ?? 30_000);
     let last: unknown;
-    // SBX exposes the host source separately in clone mode. Detect that layout
-    // before launching Pi with a host path or enabling host-backed file views.
-    const probe = 'if [ -d /run/sandbox/source ]; then printf "tauren:clone\\n"; else command -v node; fi';
     do {
       throwIfCancelled(signal);
       try {
         const result = await run({ executable: this.options.sshExecutable ?? 'ssh', args: [
-          ...(this.options.sshArgs ?? []), ...buildSshArguments(name, probe, Math.max(1, deadline - Date.now()))
+          ...(this.options.sshArgs ?? []), ...buildSshArguments(name, SBX_READINESS_COMMAND, Math.max(1, deadline - Date.now()))
         ] }, { timeoutMs: Math.max(1, deadline - Date.now()), signal });
         const node = result.stdout.trim();
         if (node === 'tauren:clone') {

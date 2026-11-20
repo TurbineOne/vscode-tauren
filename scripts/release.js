@@ -116,6 +116,16 @@ function getBranchInfo() {
   };
 }
 
+/** Resolve the GitHub release destination from the remote that receives the tag. */
+function getGithubRepository(remote) {
+  const pushUrls = getGitOutput(['remote', 'get-url', '--push', '--all', remote]).split(/\r?\n/);
+  const match = /^(?:git@github\.com:|ssh:\/\/git@github\.com\/|https:\/\/github\.com\/)([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/.exec(pushUrls[0]);
+  if (pushUrls.length !== 1 || !match) {
+    fail(`Expected one GitHub push URL for ${remote} (HTTPS or git@github.com SSH).`);
+  }
+  return match[1];
+}
+
 function checkBranchSynced(branchInfo) {
   run('git', ['fetch', 'origin', '--tags']);
   const counts = getGitOutput(['rev-list', '--left-right', '--count', `HEAD...${branchInfo.upstream}`]);
@@ -138,8 +148,8 @@ function remoteTagExists(tag) {
   }).status === 0;
 }
 
-function githubReleaseExists(tag) {
-  const result = run('gh', ['release', 'view', tag, '--json', 'tagName'], {
+function githubReleaseExists(tag, repo) {
+  const result = run('gh', ['release', 'view', tag, '--repo', repo, '--json', 'tagName'], {
     capture: true,
     allowFailure: true
   });
@@ -156,14 +166,14 @@ function githubReleaseExists(tag) {
   fail(output.trim() || `Unable to check GitHub release: ${tag}`);
 }
 
-function checkReleaseDoesNotExist(tag) {
+function checkReleaseDoesNotExist(tag, repo) {
   if (localTagExists(tag)) {
     fail(`Local tag already exists: ${tag}`);
   }
   if (remoteTagExists(tag)) {
     fail(`Remote tag already exists: ${tag}`);
   }
-  if (githubReleaseExists(tag)) {
+  if (githubReleaseExists(tag, repo)) {
     fail(`GitHub release already exists: ${tag}`);
   }
 }
@@ -291,11 +301,11 @@ function pushCommitAndTag(branchInfo, tag) {
   releaseState.pushedTag = true;
 }
 
-function createGithubRelease(tag, releaseNotes, vsixPath, tempDir) {
+function createGithubRelease(tag, releaseNotes, vsixPath, tempDir, repo) {
   const notesPath = path.join(tempDir, `${tag}-notes.md`);
   fs.writeFileSync(notesPath, releaseNotes);
   releaseState.releaseMayExist = true;
-  run('gh', ['release', 'create', tag, vsixPath, '--title', `Tauren ${tag}`, '--notes-file', notesPath]);
+  run('gh', ['release', 'create', tag, vsixPath, '--repo', repo, '--verify-tag', '--title', `Tauren ${tag}`, '--notes-file', notesPath]);
   releaseState.createdRelease = true;
 }
 
@@ -307,11 +317,11 @@ function publishOpenVsx(vsixPath) {
   run(npxCommand, ['--yes', 'ovsx', 'publish', vsixPath]);
 }
 
-function printCleanupInstructions(tag) {
+function printCleanupInstructions(tag, repo) {
   const instructions = [];
 
   if (releaseState.createdRelease || releaseState.releaseMayExist) {
-    instructions.push(`Delete GitHub release if needed: gh release delete ${tag} --yes --cleanup-tag`);
+    instructions.push(`Delete GitHub release if needed: gh release delete ${tag} --repo ${repo} --yes --cleanup-tag`);
   } else if (releaseState.pushedTag) {
     instructions.push(`Delete remote tag if needed: git push origin :refs/tags/${tag}`);
   }
@@ -344,12 +354,13 @@ function main(version, githubOnly) {
 
   checkCleanWorkingTree();
   const branchInfo = getBranchInfo();
+  releaseRepo = getGithubRepository(branchInfo.remote);
   checkTools();
   if (!githubOnly) {
     checkOpenVsxAccess();
   }
   checkBranchSynced(branchInfo);
-  checkReleaseDoesNotExist(tag);
+  checkReleaseDoesNotExist(tag, releaseRepo);
   checkChangelogReady();
   runPackagePreflight(tempDir);
 
@@ -361,7 +372,7 @@ function main(version, githubOnly) {
   });
   commitAndTag(tag);
   pushCommitAndTag(branchInfo, tag);
-  createGithubRelease(tag, releaseNotes, vsixPath, tempDir);
+  createGithubRelease(tag, releaseNotes, vsixPath, tempDir, releaseRepo);
   if (!githubOnly) {
     publishMarketplace(vsixPath);
     publishOpenVsx(vsixPath);
@@ -371,6 +382,7 @@ function main(version, githubOnly) {
 }
 
 let version;
+let releaseRepo;
 try {
   const { values, positionals } = parseArgs({
     options: { 'github-only': { type: 'boolean' }, help: { type: 'boolean', short: 'h' } },
@@ -386,6 +398,6 @@ try {
   }
 } catch (error) {
   console.error(`\nRelease failed: ${error.message}`);
-  if (version) printCleanupInstructions(`v${version}`);
+  if (version) printCleanupInstructions(`v${version}`, releaseRepo);
   process.exitCode = 1;
 }

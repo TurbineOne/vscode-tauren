@@ -66,6 +66,8 @@ function isSchemaBlocker(error) {
 async function exercisePackagedSandbox({ extension, run, sbx, ssh, t }) {
   extension = await fs.realpath(extension);
   const { SbxClient } = require(path.join(extension, 'out/sbx/sbxClient.js'));
+  const { SBX_READINESS_COMMAND } = require(path.join(extension, 'out/sbx/lifecycle.js'));
+  assert(typeof SBX_READINESS_COMMAND === 'string' && SBX_READINESS_COMMAND, 'The VSIX must include the lifecycle readiness command used by this test.');
   const mainKit = path.join(extension, 'resources/generated-sbx-sandbox');
   const serverKit = path.join(extension, 'resources/generated-sbx-kit');
   const manifest = await readJson(path.join(serverKit, 'build-manifest.json'));
@@ -128,6 +130,7 @@ async function exercisePackagedSandbox({ extension, run, sbx, ssh, t }) {
         timeouts: { command: createTimeout, startup: 120_000, handshake: 60_000 },
         onDiagnostic: value => diagnostics.push(value.includes(secret)),
         configureConnection(connection) {
+          assert(setup, 'Install the offline provider before initializing the packaged server.');
           // Observe calls on the real message connection without replacing its streams.
           for (const method of ['sendRequest', 'sendNotification']) {
             const send = connection[method].bind(connection);
@@ -155,7 +158,7 @@ async function exercisePackagedSandbox({ extension, run, sbx, ssh, t }) {
               return result;
             } catch (error) { failedCreate = true; throw error; }
           }
-          const probing = executable === ssh && args.at(-1) === 'command -v node';
+          const probing = executable === ssh && args.at(-1) === SBX_READINESS_COMMAND;
           assert(!probing || owned, `Refusing SSH to ${name} because this test did not create it.`);
           const result = await run(executable, args, { cwd, timeoutMs });
           diagnostics.push(result.stderr.includes(secret));
