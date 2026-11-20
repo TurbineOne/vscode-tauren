@@ -1,4 +1,5 @@
 import * as path from 'node:path';
+import { realpath } from 'node:fs/promises';
 import * as vscode from 'vscode';
 import {
   createWebviewHtml,
@@ -11,8 +12,10 @@ import { type AgentClientFactory, type AgentClient } from './agent/clientTypes';
 import type { AgentClientOptions } from './agent/types';
 import { PiSdkClient } from './sdk/piSdkClient';
 import { KwardClient } from './kward/kwardClient';
+import { createSbxExtensionClient, resolveSbxWorkspace } from './sbx/extensionClient';
 import type { KwardMemoryAction } from './kward/memoryActions';
 import { listAgentSessions } from './sessions/agentSessionList';
+import { discoverSbxSessionFiles } from './sessions/piSessionList';
 import type { CustomUiHostMessage } from './extensionUi/customUiHost';
 import type { ExtensionEditorHostMessage, ExtensionPromptHostMessage, ExtensionUi } from './extensionUi/types';
 import { createSessionDiffStatsFileWatcher, readSessionDiffSnapshot, writeSessionDiffSnapshot } from './diff/sessionDiffStorage';
@@ -76,7 +79,9 @@ import type { VoiceInputDevice } from './voice/types';
 
 export const taurenChatViewType = 'tauren.chatView';
 
-const currentSessionFileStorageKey = 'tauren.currentSessionFile';
+function currentSessionFileStorageKey(): string {
+  return getBackendSetting() === 'sbx' ? 'tauren.sbx.currentSessionFile' : 'tauren.currentSessionFile';
+}
 const voiceInputDevicesStorageKey = 'tauren.voice.inputDevices';
 const taurenSidebarFocusContextKey = 'tauren.sidebarFocus';
 const taurenBusyContextKey = 'tauren.busy';
@@ -90,6 +95,7 @@ type ConfiguredAgentClientDependencies = {
   showNotification: (message: string, notifyType: string) => void;
   getRejectEditWriteOutsideWorkspace: () => boolean;
   onExtensionLoadError: (path: string, error: string) => void;
+  sbx?: { extensionDirectory: string; workspace?: string; onDiagnostic: (message: string) => void };
 };
 
 type PendingPerfBoundary = {
@@ -104,11 +110,17 @@ function getSessionMetadataCacheFile(storageUri: vscode.Uri | undefined): string
   return storageUri ? path.join(storageUri.fsPath, sessionMetadataCacheFileName) : undefined;
 }
 
-function createConfiguredAgentClient(
+export function createConfiguredAgentClient(
   options: AgentClientOptions,
   dependencies: ConfiguredAgentClientDependencies
 ): AgentClient {
-  if (getBackendSetting() === 'kward') {
+  const backend = getBackendSetting();
+  if (backend === 'sbx') {
+    if (!dependencies.sbx) throw new Error('Docker Sandboxes is not configured for this client.');
+    return createSbxExtensionClient({ ...options, extensionUi: options.extensionUi ?? dependencies.extensionUi },
+      dependencies.sbx.extensionDirectory, dependencies.sbx.workspace, dependencies.sbx.onDiagnostic);
+  }
+  if (backend === 'kward') {
     return new KwardClient({
       ...options,
       extensionUi: options.extensionUi ?? dependencies.extensionUi,
@@ -153,6 +165,7 @@ export class TaurenChatViewProvider implements vscode.WebviewViewProvider, vscod
   private busyContext: boolean | undefined;
   private perfOutputChannel: vscode.OutputChannel | undefined;
   private extensionLoadOutputChannel: vscode.OutputChannel | undefined;
+  private sandboxOutputChannel: vscode.OutputChannel | undefined;
   private debugPerformanceEnabled = getDebugPerformanceSetting();
   private readonly perf = new TaurenPerfRecorder({
     isEnabled: () => this.debugPerformanceEnabled,
@@ -209,7 +222,12 @@ export class TaurenChatViewProvider implements vscode.WebviewViewProvider, vscod
       extensionUi,
       showNotification: (message, notifyType) => this.showNotification(message, notifyType),
       getRejectEditWriteOutsideWorkspace: () => getRejectEditWriteOutsideWorkspaceSetting(),
-      onExtensionLoadError: (path, error) => this.writeExtensionLoadError(path, error)
+      onExtensionLoadError: (path, error) => this.writeExtensionLoadError(path, error),
+      sbx: { extensionDirectory: this.extensionUri.fsPath, workspace: this.workspaceCwdProvider(),
+        onDiagnostic: message => {
+          this.sandboxOutputChannel ??= vscode.window.createOutputChannel('Tauren Docker Sandboxes');
+          this.sandboxOutputChannel.appendLine(message);
+        } }
     }));
     const initialSessionFile = this.sanitizeInitialSessionFile(readCurrentSessionFile(this.workspaceState));
 
@@ -303,7 +321,8 @@ export class TaurenChatViewProvider implements vscode.WebviewViewProvider, vscod
           this.setBackendContext();
         }
 
-        if (event.affectsConfiguration('tauren.backend') || event.affectsConfiguration('tauren.kward.path')) {
+        if (event.affectsConfiguration('tauren.backend') || event.affectsConfiguration('tauren.kward.path')
+          || (getBackendSetting() === 'sbx' && event.affectsConfiguration('tauren.sbx'))) {
           this.restartBackendForConfigurationChange();
         }
 
@@ -342,7 +361,10 @@ export class TaurenChatViewProvider implements vscode.WebviewViewProvider, vscod
       }),
       vscode.window.onDidChangeActiveColorTheme(() => this.resetCodeRenderer()),
       createSessionDiffStatsFileWatcher((uri) => this.scheduleSessionDiffStatsRefresh(uri)),
-      vscode.workspace.onDidChangeWorkspaceFolders(() => this.handleWorkspaceFoldersChanged())
+      vscode.workspace.onDidChangeWorkspaceFolders(() => this.handleWorkspaceFoldersChanged()),
+      vscode.workspace.onDidGrantWorkspaceTrust(() => {
+        if (getBackendSetting() === 'sbx') this.controller.refreshSessionMeta({ startClient: true, force: true });
+      })
     );
   }
 
@@ -353,8 +375,12 @@ export class TaurenChatViewProvider implements vscode.WebviewViewProvider, vscod
   ): Promise<WebviewSessionItem[]> {
     const timer = this.perf.start('sessionList.load');
     let metrics: { sessionCount: number; totalBytes: number; cacheHits: number; cacheMisses: number } | undefined;
+    const backend = getBackendSetting();
+    const scope = backend === 'sbx' ? await resolveSbxWorkspace(cwd) : undefined;
     const sessions = await listAgentSessions({
-      backend: getBackendSetting() === 'kward' ? 'kward' : 'pi',
+      backend,
+      sbxSessionStore: scope?.sessionDirectory,
+      sbxWorkspace: scope?.workspace,
       cwd,
       currentSessionFile,
       sessionMetadataCacheFile: getSessionMetadataCacheFile(this.sessionMetadataStorageUri),
@@ -395,6 +421,7 @@ export class TaurenChatViewProvider implements vscode.WebviewViewProvider, vscod
     this.pendingSessionSwitch = undefined;
     this.perfOutputChannel?.dispose();
     this.extensionLoadOutputChannel?.dispose();
+    this.sandboxOutputChannel?.dispose();
     this.codeRenderer.dispose();
     this.sessionDiffViewer.dispose();
     this.voiceController.dispose();
@@ -847,14 +874,23 @@ export class TaurenChatViewProvider implements vscode.WebviewViewProvider, vscod
         cancellable: false
       },
       async () => {
-        const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        const cwd = this.workspaceCwdProvider();
         const backend = getBackendSetting();
-        const match = await traceOrigin(createTraceOriginInputs(context, editor.document), {
-          backend,
-          cwd,
-          currentSessionFile: readCurrentSessionFile(this.workspaceState),
-          ...(backend === 'kward' ? { kwardPath: getKwardPathSetting() } : {})
-        });
+        let match;
+        try {
+          const scope = backend === 'sbx' ? await resolveSbxWorkspace(cwd) : undefined;
+          match = await traceOrigin(createTraceOriginInputs(context, editor.document), {
+            backend,
+            cwd,
+            sbxSessionStore: scope?.sessionDirectory,
+            sbxWorkspace: scope?.workspace,
+            currentSessionFile: readCurrentSessionFile(this.workspaceState),
+            ...(backend === 'kward' ? { kwardPath: getKwardPathSetting() } : {})
+          });
+        } catch (error) {
+          this.showNotification(`Tauren could not trace session history: ${error instanceof Error ? error.message : String(error)}`, 'error');
+          return;
+        }
 
         if (!match) {
           const traceLinkedCommit = await findCurrentPathGitCommit({
@@ -891,6 +927,7 @@ export class TaurenChatViewProvider implements vscode.WebviewViewProvider, vscod
   }
 
   public async showDiagnostics(): Promise<void> {
+    if (getBackendSetting() === 'sbx' && this.sandboxOutputChannel) this.sandboxOutputChannel.show(true);
     const document = await vscode.workspace.openTextDocument({
       content: this.perf.formatDiagnostics(),
       language: 'plaintext'
@@ -1235,7 +1272,8 @@ export class TaurenChatViewProvider implements vscode.WebviewViewProvider, vscod
   private async resolveLocalImageUri(src: string): Promise<vscode.Uri | undefined> {
     const uri = resolveWorkspaceImageUri(src);
 
-    if (!uri || !isSupportedLocalImagePath(uri.fsPath) || !isUriInsideWorkspace(uri)) {
+    if (!uri || !isSupportedLocalImagePath(uri.fsPath) || !isUriInsideWorkspace(uri)
+      || (getBackendSetting() === 'sbx' && !await this.isSbxWorkspaceFile(uri))) {
       return undefined;
     }
 
@@ -1252,8 +1290,18 @@ export class TaurenChatViewProvider implements vscode.WebviewViewProvider, vscod
     void this.webviewView?.webview.postMessage({ type: 'codeThemeChanged' });
   }
 
+  /** Sandbox file references must resolve to the directly mounted host workspace. */
+  private async isSbxWorkspaceFile(uri: vscode.Uri): Promise<boolean> {
+    const workspace = this.workspaceCwdProvider();
+    if (!workspace || uri.scheme !== 'file') return false;
+    try {
+      const relative = path.relative(await realpath(workspace), await realpath(uri.fsPath));
+      return relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+    } catch { return false; }
+  }
+
   private async openFileReference(filePath: string, line?: number, column?: number): Promise<void> {
-    const restrictToWorkspace = getRestrictFileReferencesToWorkspaceSetting();
+    const restrictToWorkspace = getBackendSetting() === 'sbx' || getRestrictFileReferencesToWorkspaceSetting();
     const uri = restrictToWorkspace ? resolveWorkspaceFileUri(filePath) : resolveFileReferenceUri(filePath);
 
     if (!uri) {
@@ -1271,6 +1319,10 @@ export class TaurenChatViewProvider implements vscode.WebviewViewProvider, vscod
       return;
     }
 
+    if (getBackendSetting() === 'sbx' && !await this.isSbxWorkspaceFile(uri)) {
+      this.showNotification('Tauren can only open Docker Sandboxes file references in the mounted workspace.', 'warning');
+      return;
+    }
     const document = await vscode.workspace.openTextDocument(uri);
     const targetLine = Math.min(Math.max((line ?? 1) - 1, 0), Math.max(document.lineCount - 1, 0));
     const targetColumn = Math.min(Math.max((column ?? 1) - 1, 0), document.lineAt(targetLine).text.length);
@@ -1368,6 +1420,13 @@ export class TaurenChatViewProvider implements vscode.WebviewViewProvider, vscod
       }
     }
 
+    if (getBackendSetting() === 'sbx') {
+      const scope = await resolveSbxWorkspace(this.workspaceCwdProvider());
+      const discovery = await discoverSbxSessionFiles({ sbxSessionStore: scope.sessionDirectory, sbxWorkspace: scope.workspace }, [sessionPath]);
+      let associated = false;
+      for await (const _record of discovery.readRecords(sessionPath)) { associated = true; break; }
+      if (!associated) throw new Error('Only sessions associated with this Docker Sandboxes workspace can be deleted.');
+    }
     await vscode.workspace.fs.delete(vscode.Uri.file(sessionPath), { useTrash: true });
     return true;
   }
@@ -1638,7 +1697,7 @@ export class TaurenChatViewProvider implements vscode.WebviewViewProvider, vscod
     }
 
     const message = `Tauren ignored persisted session ${sessionFile} because ${unsafeReason}. Starting a new session in ${workspaceCwd}.`;
-    void this.workspaceState?.update(currentSessionFileStorageKey, undefined).then(undefined, () => undefined);
+    void this.workspaceState?.update(currentSessionFileStorageKey(), undefined).then(undefined, () => undefined);
     this.showNotification(message, 'warning');
     this.pendingToastMessages.push({ message, kind: 'warning' });
     return undefined;
@@ -1658,7 +1717,7 @@ export class TaurenChatViewProvider implements vscode.WebviewViewProvider, vscod
       return;
     }
 
-    void this.workspaceState.update(currentSessionFileStorageKey, sessionFile || undefined).then(undefined, () => undefined);
+    void this.workspaceState.update(currentSessionFileStorageKey(), sessionFile || undefined).then(undefined, () => undefined);
   }
 
   private setSidebarFocusContext(focused: boolean): void {
@@ -1756,6 +1815,6 @@ function getWebviewLocalResourceRoots(extensionUri: vscode.Uri): vscode.Uri[] {
 }
 
 function readCurrentSessionFile(workspaceState: vscode.Memento | undefined): string | undefined {
-  const value = workspaceState?.get<unknown>(currentSessionFileStorageKey);
+  const value = workspaceState?.get<unknown>(currentSessionFileStorageKey());
   return typeof value === 'string' && value ? value : undefined;
 }

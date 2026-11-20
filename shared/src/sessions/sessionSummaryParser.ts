@@ -20,14 +20,16 @@ type MessageSummary = {
   timestamp?: number;
 };
 
-export async function readSessionSummary(filePath: string, stats: Stats): Promise<RawSessionInfo | undefined> {
+export async function readSessionSummary(
+  filePath: string, stats: Stats, chunks: AsyncIterable<string> = createReadStream(filePath, { encoding: 'utf8' })
+): Promise<RawSessionInfo | undefined> {
   let header: Record<string, unknown> | undefined;
   let messageCount = 0;
   let firstMessage = '';
   let name: string | undefined;
   let lastActivityTime: number | undefined;
 
-  for await (const line of iterSessionJsonlLines(filePath)) {
+  for await (const line of iterSessionJsonlLines(chunks)) {
     if (!header) {
       const entry = parseJsonlRecord(line);
 
@@ -122,10 +124,10 @@ export async function readSessionSummary(filePath: string, stats: Stats): Promis
   };
 }
 
-async function* iterSessionJsonlLines(filePath: string): AsyncGenerator<string> {
+async function* iterSessionJsonlLines(chunks: AsyncIterable<string>): AsyncGenerator<string> {
   let buffer = '';
 
-  for await (const chunk of createReadStream(filePath, { encoding: 'utf8' })) {
+  for await (const chunk of chunks) {
     buffer += chunk;
 
     for (;;) {

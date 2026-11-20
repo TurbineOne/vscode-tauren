@@ -34,6 +34,10 @@ export type PiClient = {
   expandPromptCommand?(command: string, args: string): Promise<string>;
   abort(): Promise<void>;
   reload(): Promise<void>;
+  /** True when an interrupted connection requires explicit recovery. */
+  isDisconnected?(): boolean;
+  /** Reopen the current session without replaying requests. Call getMessages() to restore history. */
+  reconnect?(): Promise<void>;
   isRunning(): boolean;
   getState(): Promise<PiSessionState>;
   getSessionStats(): Promise<PiSessionStats>;
@@ -44,6 +48,8 @@ export type PiClient = {
   applyComposerCompletion?(application: ComposerCompletionApplication): Promise<ComposerCompletionApplied | undefined>;
   getStartupResources?(): Promise<PiStartupResources>;
   getAuthProviders?(): Promise<PiAuthProvidersResult>;
+  /** Open setup guidance instead of collecting or changing credentials in Tauren. */
+  openCredentialDocumentation?(): Promise<void>;
   loginWithApiKey?(providerId: string, apiKey: string): Promise<PiAuthActionResult>;
   loginWithOAuth?(providerId: string, callbacks: PiOAuthLoginCallbacks): Promise<PiAuthActionResult>;
   logoutAuthProvider?(providerId: string): Promise<PiAuthActionResult>;

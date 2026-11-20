@@ -1,4 +1,5 @@
 import { getSettingsForSection, settingDefinitions, settingsSections, type SettingDefinition, type SettingOption, type SettingValue } from '../../settings/settingsRegistry';
+import { SBX_CREDENTIAL_DOCUMENTATION } from '../../sbx/credentials';
 import { parseWebviewSettingsSection } from '../../webviewProtocol/values';
 import { getModelFullId, getScopedModelSelection, normalizeScopedModelSelection } from '../scopedModels';
 import type { SettingsSection, WebviewState } from '../types';
@@ -113,6 +114,11 @@ export class SettingsPaneController {
 
   private handleAuthAction(button: HTMLButtonElement): void {
     const action = button.dataset.authAction;
+
+    if (action === 'sbxCredentials') {
+      this.options.postMessage({ type: 'openExternal', url: SBX_CREDENTIAL_DOCUMENTATION });
+      return;
+    }
 
     if (action === 'refresh') {
       this.options.postMessage({ type: 'authRefresh' });
@@ -523,6 +529,18 @@ export class SettingsPaneController {
     }
 
     const providers = state.auth.providers;
+    if (state.settings.values['tauren.backend'] === 'sbx') {
+      const card = document.createElement('article');
+      card.className = 'settings-surface__card';
+      card.append(createTextElement('h4', 'settings-surface__card-title', 'Docker Sandboxes credentials'),
+        createTextElement('p', 'settings-surface__card-body', 'Configure model credentials on the Docker Sandboxes host. Tauren does not store or send them.'),
+        this.createAuthButton('Open Credential Documentation', 'sbxCredentials', undefined, false));
+      for (const provider of providers) {
+        card.append(createTextElement('p', 'settings-surface__card-body', `${provider.name}: ${provider.configured ? 'Configured' : 'Not configured'}`));
+      }
+      cards.append(card);
+      return;
+    }
     if (providers.length === 0) {
       const emptyCard = document.createElement('article');
       emptyCard.className = 'settings-surface__card';
@@ -1021,7 +1039,7 @@ function createSettingsSignature(sectionId: SettingsSection, state: WebviewState
   const auth = sectionId === 'login' ? state.auth : undefined;
   const voice = sectionId === 'voice' ? state.voice : undefined;
   const providerFilter = sectionId === 'scopedModels' ? scopedModelsProviderFilter : undefined;
-  return JSON.stringify([sectionId, values, modelOptions, auth, voice, state.busy, state.settings.errors, providerFilter]);
+  return JSON.stringify([sectionId, values, modelOptions, auth, voice, state.busy, state.settings.errors, providerFilter, state.settings.values['tauren.backend']]);
 }
 
 function getVoiceDownloadLabel(download: { status: string; receivedBytes?: number; totalBytes?: number }): string {

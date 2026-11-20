@@ -12,7 +12,8 @@ import { SandboxLifecycle, type SandboxLifecycleOptions, type SandboxSession } f
 import { bounded } from './process';
 import * as validate from './clientValidation';
 
-export const SBX_CREDENTIAL_DOCUMENTATION = 'https://docs.docker.com/ai/sandboxes/credentials/';
+import { SBX_CREDENTIAL_DOCUMENTATION } from './credentials';
+export { SBX_CREDENTIAL_DOCUMENTATION } from './credentials';
 export interface SbxClientOptions extends PiClientOptions {
   lifecycle: SandboxLifecycleOptions;
   /** Host displays SBX guidance instead of opening a Pi credential-entry flow.
@@ -68,6 +69,7 @@ export class SbxClient implements AgentClient {
   onEvent(listener: (event: PiEvent) => void): () => void { this.events.add(listener); return () => this.events.delete(listener); }
   onError(listener: (message: string) => void): () => void { this.errors.add(listener); return () => this.errors.delete(listener); }
   isRunning(): boolean { return !this.disposed && !!(this.session || this.opening); }
+  isDisconnected(): boolean { return this.disconnected && !this.disposed; }
 
   /** A failed/disconnected connection is not automatically replayed or reattached.
    * Explicit reconnect restores history via getMessages(), never cached transcript.
@@ -246,8 +248,11 @@ export class SbxClient implements AgentClient {
   }
   /** Never invoke wire auth methods or inspect/call OAuth callbacks. */
   private async credentialGuidance(providerId: string) {
-    await this.options.showCredentialDocumentation(SBX_CREDENTIAL_DOCUMENTATION);
+    await this.openCredentialDocumentation();
     return { providerId, message: 'Configure credentials on the SBX host; Tauren does not write sandbox credentials.' };
+  }
+  async openCredentialDocumentation(): Promise<void> {
+    await this.options.showCredentialDocumentation(SBX_CREDENTIAL_DOCUMENTATION);
   }
   loginWithApiKey(providerId: string, _apiKey: string) { return this.credentialGuidance(providerId); }
   loginWithOAuth(providerId: string, _callbacks: PiOAuthLoginCallbacks) { return this.credentialGuidance(providerId); }

@@ -4,8 +4,9 @@
 provisions or adopts one named sandbox, then opens one per-client SDK server
 connection through the concrete `SbxSshTransport`. Command execution, providers
 and inspection decoding can be supplied by the caller; there is no interchangeable
-transport interface or factory. The AgentClient adapter and settings UI are
-separate integration work.
+transport interface or factory. Tauren’s **Docker Sandboxes** backend uses this
+service through `SbxClient`. See [Sandbox AgentClient adapter](./sbx-client.md)
+for configuration, session discovery, and reconnection.
 
 ## Ownership and sequence
 

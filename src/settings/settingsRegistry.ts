@@ -1,8 +1,10 @@
-export type TaurenBackend = 'pi' | 'kward';
+export type TaurenBackend = 'pi' | 'kward' | 'sbx';
 
 export type TaurenSettingId =
   | 'tauren.backend'
   | 'tauren.kward.path'
+  | 'tauren.sbx.storageRoot'
+  | 'tauren.sbx.sandboxName'
   | 'tauren.outputColors'
   | 'tauren.animationsEnabled'
   | 'tauren.showWelcome'
@@ -98,7 +100,8 @@ const transportOptions = [
 
 const backendOptions = [
   { value: 'pi', label: 'Pi' },
-  { value: 'kward', label: 'Kward' }
+  { value: 'kward', label: 'Kward' },
+  { value: 'sbx', label: 'Docker Sandboxes' }
 ] as const satisfies readonly SettingOption[];
 
 const customUiThemeOptions = [
@@ -253,6 +256,28 @@ export const settingDefinitions = [
     control: 'text',
     defaultValue: '',
     helper: 'Leave empty to launch the global kward rpc command.',
+    liveBehavior: 'reload'
+  },
+  {
+    id: 'tauren.sbx.storageRoot',
+    owner: 'tauren',
+    section: 'runtime',
+    label: 'Docker Sandboxes storage root',
+    description: 'Host directory for sessions when Backend is Docker Sandboxes.',
+    control: 'text',
+    defaultValue: '~/.tauren',
+    helper: 'Use an absolute POSIX path or a path starting with ~/.',
+    liveBehavior: 'reload'
+  },
+  {
+    id: 'tauren.sbx.sandboxName',
+    owner: 'tauren',
+    section: 'runtime',
+    label: 'Docker sandbox name',
+    description: 'Optional sandbox name when Backend is Docker Sandboxes.',
+    control: 'text',
+    defaultValue: '',
+    helper: 'Leave empty to derive the name from the workspace folder.',
     liveBehavior: 'reload'
   },
   {

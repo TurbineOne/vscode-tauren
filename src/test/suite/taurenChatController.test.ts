@@ -1610,6 +1610,46 @@ suite('TaurenChatController', () => {
     harness.controller.dispose();
   });
 
+  test('credential guidance bypasses both secret-entry flows and credential changes', async () => {
+    const guidanceArgs: unknown[][] = [];
+    const client = Object.assign(new FakePiClient(), {
+      openCredentialDocumentation: async (...args: unknown[]) => { guidanceArgs.push(args); },
+      getAuthProviders: async () => { assert.fail('Guidance should not require provider discovery'); },
+      loginWithApiKey: async () => { assert.fail('Should not attempt API-key login'); },
+      loginWithOAuth: async () => { assert.fail('Should not attempt OAuth login'); },
+      logoutAuthProvider: async () => { assert.fail('Should not attempt logout'); }
+    });
+    const harness = createControllerHarness([client], {
+      inputSecret: async () => { assert.fail('Should not ask for a secret'); }
+    });
+
+    await harness.controller.handleWebviewMessage({ type: 'submit', text: '/login' });
+    assert.notStrictEqual(harness.controller.getStateMessage().chatFace, 'settings');
+    await harness.controller.handleWebviewMessage({ type: 'authLogin', providerId: 'provider', authType: 'api_key' });
+    await harness.controller.handleWebviewMessage({ type: 'authLogin', providerId: 'provider', authType: 'oauth' });
+    await harness.controller.handleWebviewMessage({ type: 'authLogout', providerId: 'provider' });
+    await harness.controller.runLocalSlashCommand('logout');
+
+    assert.deepStrictEqual(guidanceArgs, [[], [], [], [], []]);
+    assert.deepStrictEqual(harness.notifications, []);
+    harness.controller.dispose();
+  });
+
+  test('failure to open credential guidance does not fall back to entering credentials', async () => {
+    const client = Object.assign(new FakePiClient(), {
+      openCredentialDocumentation: async () => { throw new Error('Browser unavailable'); },
+      getAuthProviders: async () => { assert.fail('Should not fall back to provider discovery'); }
+    });
+    const harness = createControllerHarness([client], {
+      inputSecret: async () => { assert.fail('Should not ask for a secret'); }
+    });
+
+    await harness.controller.handleWebviewMessage({ type: 'authLogin', providerId: 'provider', authType: 'api_key' });
+
+    assert.deepStrictEqual(harness.notifications, [{ message: 'Browser unavailable', type: 'warning' }]);
+    harness.controller.dispose();
+  });
+
   test('memory slash command writes status to the transcript', async () => {
     const client = new FakePiClient({ memoryStatus: { enabled: true, autoSummary: false } });
     const harness = createControllerHarness([client], { getTaurenSettingValues: () => ({ 'tauren.backend': 'kward' }) });
@@ -2382,6 +2422,78 @@ suite('TaurenChatController', () => {
     ]);
     assert.strictEqual(lastState(harness).currentSessionFile, '/sessions/cloned.jsonl');
     assert.deepStrictEqual(harness.toasts, ['Cloned current session.']);
+    harness.controller.dispose();
+  });
+
+  test('reload reconnects the same client and replaces local transcript with persisted history', async () => {
+    const sessionFile = '/sessions/current.jsonl';
+    let disconnected = false;
+    let reconnectCalls = 0;
+    const reconnecting = createDeferred<void>();
+    const client = Object.assign(new FakePiClient({ state: { sessionFile } }), {
+      isDisconnected: () => disconnected,
+      isRunning: () => !disconnected,
+      reconnect: async () => {
+        reconnectCalls += 1;
+        await reconnecting.promise;
+        disconnected = false;
+      }
+    });
+    const harness = createControllerHarness([client]);
+    await harness.controller.handleWebviewMessage({ type: 'submit', text: 'Interrupted work' });
+    disconnected = true;
+    client.emitError('Connection lost');
+    client.messages = [{ role: 'user', content: 'Saved history' }];
+
+    const command = harness.controller.runLocalSlashCommand('reload');
+    const slash = harness.controller.handleWebviewMessage({ type: 'submit', text: '/reload' });
+    await flushPromises();
+    assert.strictEqual(reconnectCalls, 1);
+    assert.strictEqual(client.messagesCalls, 0);
+    assert.strictEqual(lastState(harness).sessionLoading, true);
+    await harness.controller.handleWebviewMessage({ type: 'submit', text: 'Do not queue this' });
+    reconnecting.resolve();
+    await Promise.all([command, slash]);
+
+    assert.strictEqual(harness.createCalls, 1);
+    assert.strictEqual(client.disposed, false);
+    assert.strictEqual(client.reloadCalls, 0);
+    assert.strictEqual(client.messagesCalls, 1);
+    assert.deepStrictEqual(client.prompts, ['Interrupted work']);
+    assert.strictEqual(lastState(harness).sessionLoading, undefined);
+    assert.deepStrictEqual(lastState(harness).messages, [
+      { role: 'user', text: 'Saved history' },
+      { role: 'system', text: 'Reconnected to the backend and restored session history. Interrupted work was not replayed.' }
+    ]);
+    assert.strictEqual(lastState(harness).currentSessionFile, sessionFile);
+    harness.controller.dispose();
+  });
+
+  test('reload reports a failed reconnect and restores history on a later attempt', async () => {
+    let disconnected = true;
+    let reconnectCalls = 0;
+    const client = Object.assign(new FakePiClient(), {
+      isDisconnected: () => disconnected,
+      reconnect: async () => {
+        disconnected = false;
+        if (++reconnectCalls === 1) {
+          throw new Error('Connection unavailable');
+        }
+      }
+    });
+    const harness = createControllerHarness([client]);
+
+    await harness.controller.runLocalSlashCommand('reload');
+    assert.strictEqual(lastState(harness).sessionLoading, undefined);
+    assert.match(lastState(harness).messages.at(-1)?.text ?? '', /Connection unavailable/);
+    assert.strictEqual(client.messagesCalls, 0);
+    await harness.controller.handleWebviewMessage({ type: 'submit', text: 'Do not send before recovery' });
+    assert.deepStrictEqual(client.prompts, []);
+
+    await harness.controller.runLocalSlashCommand('reload');
+    assert.strictEqual(reconnectCalls, 2);
+    assert.strictEqual(client.messagesCalls, 1);
+    assert.strictEqual(client.reloadCalls, 0);
     harness.controller.dispose();
   });
 
@@ -3446,6 +3558,7 @@ type ControllerHarnessOptions = {
   cwd?: string;
   getCwd?: () => string | undefined;
   extensionUi?: TaurenChatControllerOptions['extensionUi'];
+  inputSecret?: TaurenChatControllerOptions['inputSecret'];
   stateScheduler?: StatePublisherScheduler;
   initialSessionMeta?: TaurenChatSessionMetaSnapshot;
   initialSessionFile?: string;
@@ -3495,6 +3608,7 @@ function createControllerHarness(
       toasts.push(message);
     },
     extensionUi: options.extensionUi,
+    inputSecret: options.inputSecret,
     stateScheduler: options.stateScheduler,
     initialSessionMeta: options.initialSessionMeta,
     initialSessionFile: options.initialSessionFile,

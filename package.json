@@ -462,11 +462,13 @@
           "default": "pi",
           "enum": [
             "pi",
-            "kward"
+            "kward",
+            "sbx"
           ],
           "enumDescriptions": [
             "Use the bundled Pi SDK backend.",
-            "Use an experimental local Kward JSON-RPC backend."
+            "Use an experimental local Kward JSON-RPC backend.",
+            "Run Pi in Docker Sandboxes."
           ],
           "description": "Agent backend Tauren should use for sidebar chat. Kward is experimental."
         },
@@ -474,6 +476,26 @@
           "type": "string",
           "default": "",
           "description": "Optional path to a Kward executable. Leave empty to launch the global `kward rpc` command when the Kward backend is selected."
+        },
+        "tauren.sbx.commandProvider": {
+          "type": "object",
+          "description": "Optional host executable and argument list that describe how to create a Docker sandbox. Reset this setting to use Tauren's built-in provider. Tauren runs the executable only in a trusted workspace and does not parse a shell command.",
+          "required": ["executable", "args"],
+          "additionalProperties": false,
+          "properties": {
+            "executable": { "type": "string", "minLength": 1 },
+            "args": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "tauren.sbx.storageRoot": {
+          "type": "string",
+          "default": "~/.tauren",
+          "description": "Host directory for Docker Sandboxes sessions. Use an absolute POSIX path or a path starting with ~/."
+        },
+        "tauren.sbx.sandboxName": {
+          "type": "string",
+          "default": "",
+          "description": "Docker sandbox name override. Leave empty to derive the name from the workspace folder. An override must be 1–63 lowercase letters, digits, or hyphens and start with a letter or digit."
         },
         "tauren.outputColors": {
           "type": "boolean",
