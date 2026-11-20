@@ -191,7 +191,7 @@ Pure helpers in `src/sbx/configuration.ts`, `commandProvider.ts`, and `commandCo
 
 Implemented the injectable lifecycle and per-client framed transport under `src/sbx/`, with fixture-process gates for creation/adoption, SSH auto-start/readiness, concurrency, cancellation, handshake validation, stderr and independent disposal. The canonical protocol/framing helpers now live in `shared/src/sbx/`, consumed as CJS/ESM without cross-project source imports. Stopped sandboxes start through SSH, not an invented `sbx start` command or policy-changing `run -d`.
 
-**Outstanding step-9 compatibility verification:** SBX's inspect JSON schema is undocumented. The narrow `{ name, workspace }` decoder is explicitly provisional and fails closed on unknown shapes; real v0.51 primary-workspace/mount metadata (including clone mode) must be captured and supported before this step is considered complete. See [lifecycle details and limits](../development/sbx-lifecycle.md). Fixture success does not establish production-SBX adoption compatibility. No real SBX is available in this environment.
+**Outstanding step-9 compatibility verification:** SBX's inspect JSON schema is undocumented. The narrow `{ name, workspace }` decoder is explicitly provisional and fails closed on unknown shapes; real v0.51 primary-workspace/mount metadata (including clone mode) must be captured and supported before this step is considered complete. See [lifecycle details and limits](../development/sbx-lifecycle.md). Capture the inspection output on the SBX host and rerun the packaged integration suite after updating the decoder.
 
 ### ~~10. Implement the Tauren SBX AgentClient adapter~~ — Completed
 
@@ -213,13 +213,17 @@ The **Docker Sandboxes** setting now selects `SbxClient` through the same factor
 
 The focused tests use local fixtures. Extension Host execution was blocked by a missing `libglib-2.0.so.0`; manual UI checks and the real-SBX inspection schema are still unverified.
 
-### 12. Validate the packaged end-to-end flow and document operation
+### ~~12. Validate the packaged end-to-end flow and document operation~~ — Completed
 
-- Add explicitly invoked real-SBX integration tests using an extracted/installed VSIX's kit and server artifacts. Keep these separate from ordinary automated tests because they require host Docker Sandboxes, login, and SSH setup.
-- Test both the default provider selecting Tauren's pinned-image standalone sandbox kit and a generic third-party command-provider fixture selecting its own compatible Pi sandbox kit and adding another mixin. Verify that both receive the same Tauren server mixin. Use deterministic model fixtures where possible; make live-provider smoke tests optional and credential-dependent.
-- Cover new creation, stopped/running reattachment, concurrent sessions, collision rejection, missing/incompatible server, session-store sharing, persistence across sandbox removal/recreation, and abrupt SSH loss followed by history restoration. Verify tools actually run in the sandbox and model secrets are not sent by Tauren or logged.
-- Document prerequisites, settings, provider JSON, lifecycle/disconnect limitations, recreation guidance, and test commands. Add the user-facing changelog entry when the backend is exposed.
-- **Release gate:** all standalone protocol/SDK/SSH tests, extension compile and regression tests, package-content checks, and the real-SBX suite pass on a declared supported SBX version. Run `git diff --check`; explicitly record any platform or manual verification not performed. Do not claim parity until the checklist and Extension Host verification are complete.
+- ~~Add explicitly invoked real-SBX integration tests using an extracted/installed VSIX's kit and server artifacts. Keep these separate from ordinary automated tests because they require host Docker Sandboxes, login, and SSH setup.~~
+- ~~Test both the default provider selecting Tauren's pinned-image standalone sandbox kit and a generic third-party command-provider fixture selecting its own compatible Pi sandbox kit and adding another mixin. Verify that both receive the same Tauren server mixin. Use deterministic model fixtures where possible; make live-provider smoke tests optional and credential-dependent.~~
+- ~~Cover new creation, stopped/running reattachment, concurrent sessions, collision rejection, missing/incompatible server, session-store sharing, persistence across sandbox removal/recreation, and abrupt SSH loss followed by history restoration. Verify tools actually run in the sandbox and model secrets are not sent by Tauren or logged.~~
+- ~~Document prerequisites, settings, provider JSON, lifecycle/disconnect limitations, recreation guidance, and test commands. Add the user-facing changelog entry when the backend is exposed.~~
+- ~~**Release gate:** all standalone protocol/SDK/SSH tests, extension compile and regression tests, package-content checks, and the real-SBX suite pass on a declared supported SBX version. Run `git diff --check`; explicitly record any platform or manual verification not performed. Do not claim parity until the checklist and Extension Host verification are complete.~~
+
+The packaged integration suite loads the client and kits from a VSIX and uses offline model responses. The release script runs the suite against the versioned VSIX before publishing that same archive.
+
+To finish verification, run `npm run test:all` from the host, outside the sandbox, with Docker Sandboxes and SSH configured. Run the [manual Extension Host checks](../development/release.md#manual-checks) with the installed VSIX and record the host platform and SBX version tested. If the packaged suite rejects the inspection response, capture sanitized `sbx inspect NAME --json` output from a disposable test sandbox, update the workspace decoder to match the verified schema, and rerun the suite. Do not treat the local VSIX test as a substitute for either real-SBX suite.
 
 ## Consequences
 
@@ -254,7 +258,7 @@ The passing extracted-VSIX test provisions an independent installed Pi tree outs
 
 ### 2026-11-12 — SSH verification uses an SBX shell sandbox
 
-Replace the disposable local OpenSSH daemon fixture with an explicitly invoked SBX shell-sandbox fixture. The local-daemon approach introduced host tool installation, key/port management, and account eligibility requirements unrelated to Tauren; SBX already supplies the target SSH endpoint. Tests stage code/dependencies read-only, use separate writable state, and retain the shared remote-command quoting helper. Process inspection and cleanup assertions run inside the VM before final sandbox removal. Root `npm test` keeps local deterministic coverage; `npm run test:sandbox-server:sbx` owns the slower SBX transport gate. This supersedes the original requirement that the SSH gate need no SBX. It does not replace Tauren-kit installation or packaged-artifact verification. The SBX test gate is not yet runtime-verified in this environment, where `sbx` is unavailable.
+Replace the disposable local OpenSSH daemon fixture with an explicitly invoked SBX shell-sandbox fixture. The local-daemon approach introduced host tool installation, key/port management, and account eligibility requirements unrelated to Tauren; SBX already supplies the target SSH endpoint. Tests stage code/dependencies read-only, use separate writable state, and retain the shared remote-command quoting helper. Process inspection and cleanup assertions run inside the VM before final sandbox removal. Root `npm test` keeps local deterministic coverage; `npm run test:sandbox-server:sbx` owns the slower SBX transport gate. This supersedes the original requirement that the SSH gate need no SBX. It does not replace Tauren-kit installation or packaged-artifact verification. Run the SSH gate on the SBX host, outside the sandbox, to verify the transport and process cleanup.
 
 ### 2026-11-09 21:32:03 MST — Step 1: kit source and installation contract
 

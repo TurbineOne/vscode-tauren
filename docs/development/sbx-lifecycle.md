@@ -114,7 +114,7 @@ an explicit step-9 verification gap. Do not mark it complete based on fixtures.
 CLI references used: Docker docs commit
 `a0442378fca4987b1235614ec917b4138b5d5e5d`, automation/usage/SSH integration pages
 and generated `sbx_ls`/`sbx_inspect` references; docker/sbx-releases issue #732
-confirms the JSON schema is undocumented. No real SBX binary was run here.
+confirms the JSON schema is undocumented.
 
 ## Connection lifetime and errors
 

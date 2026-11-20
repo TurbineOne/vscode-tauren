@@ -8,7 +8,7 @@ This page captures the practical release flow for Tauren contributors.
 2. Run compile and tests.
 3. Package the extension.
 4. Install the VSIX locally and smoke test the sidebar.
-5. Set `OVSX_PAT` to an Open VSX personal access token in the release shell. Keep the token in a secure local secret store or environment configuration; never commit it.
+5. If publishing to Open VSX, set `OVSX_PAT` to an Open VSX personal access token in the release shell. Keep the token in a secure local secret store or environment configuration; never commit it.
 
 Verify the token can publish to Tauren's Open VSX namespace before the first release and whenever the token changes:
 
@@ -59,10 +59,28 @@ TAUREN_TEST_VSIX=/absolute/path/tauren.vsix node --test scripts/sandbox-package.
 ```
 
 Release preflight runs the local extracted-artifact test against its preflight
-VSIX. This does not verify real-SBX installation: packaged end-to-end validation
-remains a separate later gate on a provisioned host, and shell-kit transport tests
-do not replace it. The source-kit installation probe remains available through
-`npm run test:sbx-kit:smoke`; there is no `test:sandbox-package:sbx` command.
+VSIX. To test the packaged backend in a real VM, run the separate gate on a
+host with Docker Sandboxes, OpenSSH, `sbx login`, and `sbx setup ssh`:
+
+```sh
+npm run test:sandbox-package:sbx
+# Or test an existing artifact:
+TAUREN_TEST_VSIX=/absolute/path/tauren.vsix npm run test:sandbox-package:sbx
+```
+
+The gate targets stable SBX 0.51 or later within 0.x and records the version it
+runs against. That range is an admission check, not a list of verified releases.
+The test uses disposable sandboxes and offline model responses. Missing SBX or
+an incompatible inspection response fails the gate rather than skipping it.
+See [sandbox lifecycle](./sbx-lifecycle.md#sbx-compatibility-limitation) for the
+inspection schema that still needs a live capture. The v3 shell-kit transport
+tests and the source-kit installation probe are separate checks.
+
+The release script runs the real-SBX gate on the versioned VSIX before committing,
+tagging, or publishing. GitHub, VS Code Marketplace, and Open VSX receive that
+same archive. Run `npm run test:all` and complete the manual checks below before
+releasing. Record the tested SBX version and platform; do not infer parity from
+fixture tests.
 
 Build and install a local VSIX:
 
@@ -82,7 +100,13 @@ For example:
 npm run publish -- 1.10.0
 ```
 
-`npm run release -- <version>` remains an alias for this command. Open VSX receives the prebuilt release VSIX, authenticated with `OVSX_PAT`.
+To create a GitHub release with the VSIX attached without publishing to the VS Code Marketplace or Open VSX, pass `--github-only`:
+
+```sh
+npm run publish -- 1.10.0 --github-only
+```
+
+This mode still runs the release checks and pushes the release commit and tag. It does not require Marketplace credentials or `OVSX_PAT`. Without the flag, the script publishes to all three destinations. `npm run release` is an alias and accepts the same arguments.
 
 ## Manual checks
 
@@ -96,6 +120,11 @@ At minimum, verify:
 - session diff opens after a file edit,
 - settings open,
 - extension custom UI still renders if the release touched bridge code.
+
+For Docker Sandboxes, check the Session List Lane and Session Tree Lane, tool
+rendering, extension UI, and Session Changes in the Extension Host. Confirm that
+`/reload` after a disconnect restores history without replaying a prompt. Repeat
+the relevant checks with the in-process Pi and Kward backends.
 
 ## Documentation checks
 

@@ -99,10 +99,11 @@ xvfb-run -a npm run test:all
 ```
 
 This runs `npm test`, the extracted-VSIX `test:sandbox-package` gate, then
-`test:sandbox-server:sbx`, stopping on failure. It is the combined regression gate for server/transport changes; ordinary
-`npm test` remains usable without SBX. The source-kit installation probe
-(`test:sbx-kit:smoke`) and future packaged end-to-end gates remain separate, not
-implicitly included in `test:all`. There is no `test:sandbox-package:sbx` command.
+`test:sandbox-server:sbx` and `test:sandbox-package:sbx`, stopping on failure.
+Ordinary `npm test` remains usable without SBX. The real packaged gate can also
+run on its own or against a supplied VSIX; see the [release process](./release.md)
+for prerequisites and invocation. The source-kit installation probe
+(`test:sbx-kit:smoke`) remains separate.
 Production Pi kits remain v2; the shell-test base and Node mixin remain v3.
 
 The fixture mounts prepared code read-only and uses a separate writable workspace
