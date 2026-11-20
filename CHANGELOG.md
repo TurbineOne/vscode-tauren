@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-20
+
 - Add an experimental Docker Sandboxes backend for Pi. Tauren lists sessions from the sandbox’s host store, links to Docker’s credential setup, and reconnects with `/reload` without replaying prompts.
 
 - Add the internal SBX lifecycle service and per-client framed SSH transport, with bounded startup/shutdown and offline fixture coverage. Production SBX inspection-schema verification remains outstanding.
