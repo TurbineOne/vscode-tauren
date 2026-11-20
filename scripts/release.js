@@ -227,7 +227,7 @@ function runPackagePreflight(tempDir) {
   run(npmCommand, ['run', 'verify:pi-sdk']);
   checkCleanWorkingTree();
   const vsix = path.join(tempDir, 'preflight.vsix');
-  run(npxCommand, ['--yes', '@vscode/vsce', 'package', '--out', vsix]);
+  run(process.execPath, ['scripts/package-vsix.js', '--out', vsix]);
   // Verify installed server assets/peers and real SDK behavior from this archive,
   // not only the development build. SBX installation remains an explicit gate.
   run(process.execPath, ['--test', 'scripts/sandbox-package.test.js'], {
@@ -278,7 +278,7 @@ function updateReleaseFiles(version) {
 
 function createPackage(version, tempDir) {
   const vsixPath = path.join(tempDir, `tauren-${version}.vsix`);
-  run(npxCommand, ['--yes', '@vscode/vsce', 'package', '--out', vsixPath]);
+  run(process.execPath, ['scripts/package-vsix.js', '--out', vsixPath]);
   if (!fs.existsSync(vsixPath)) {
     fail(`Expected VSIX was not created: ${vsixPath}`);
   }

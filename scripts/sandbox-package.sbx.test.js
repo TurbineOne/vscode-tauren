@@ -41,7 +41,7 @@ test('packaged Tauren backend on real Docker Sandboxes', { timeout: 1_800_000 },
     const archive = process.env.TAUREN_TEST_VSIX
       ? path.resolve(process.env.TAUREN_TEST_VSIX) : path.join(directory, 'tauren.vsix');
     if (!process.env.TAUREN_TEST_VSIX) {
-      await run('npx', ['--yes', '@vscode/vsce', 'package', '--out', archive], { timeoutMs: 600_000 });
+      await run(process.execPath, ['scripts/package-vsix.js', '--out', archive], { timeoutMs: 600_000 });
     }
     const { stdout } = await run('unzip', ['-Z1', archive]);
     const members = stdout.trimEnd().split(/\r?\n/);

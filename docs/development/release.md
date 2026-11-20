@@ -32,6 +32,18 @@ Run tests:
 npm test
 ```
 
+Build a VSIX without publishing it:
+
+```sh
+npm run package:vsix -- --out tauren.vsix
+```
+
+Use this command instead of invoking `vsce package` directly. It combines
+`.vscodeignore` with exclusions for dependencies that `package-lock.json` marks
+as development-only. This keeps the linked shared package’s build dependencies
+out of the archive while retaining Shiki, the bundled Pi runtime, and the SBX
+kits. Local installation, release builds, and package tests use the same filter.
+
 Verify the generated sandbox kits and run the real SDK server from an extracted
 VSIX, outside the checkout:
 

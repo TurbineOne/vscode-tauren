@@ -19,6 +19,7 @@ const { createRequire } = require('node:module');
 const os = require('node:os');
 const path = require('node:path');
 const { test } = require('node:test');
+const { developmentPackagePaths } = require('./package-vsix');
 
 const root = path.resolve(__dirname, '..');
 const readJson = file => JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -175,10 +176,7 @@ test('actual VSIX server uses an independently provisioned Pi harness outside th
     const archive = process.env.TAUREN_TEST_VSIX
       ? path.resolve(process.env.TAUREN_TEST_VSIX) : path.join(directory, 'tauren.vsix');
     if (!process.env.TAUREN_TEST_VSIX) {
-      // Full production dependency collection and the normal prepublish hook.
-      // vsce has no supported --no-prepublish flag. The orchestrator can supply
-      // its already-built VSIX to avoid building twice. No version arg mutates Git.
-      run('npx', ['--yes', '@vscode/vsce', 'package', '--out', archive]);
+      run(process.execPath, ['scripts/package-vsix.js', '--out', archive]);
     }
     assert(fs.statSync(archive).isFile(), `Missing VSIX: ${archive}`);
     const members = run('unzip', ['-Z1', archive]).trim().split(/\r?\n/);
@@ -193,6 +191,9 @@ test('actual VSIX server uses an independently provisioned Pi harness outside th
       assert(!/^extension\/(?:src|shared|sandbox-server|scripts|test|tests)\//.test(member),
         `Source/test tree leaked into VSIX: ${member}`);
     }
+    for (const name of developmentPackagePaths(readJson(path.join(root, 'package-lock.json')))) {
+      assert(!members.some(member => member.startsWith(`extension/${name}/`)), `Development dependency leaked into VSIX: ${name}`);
+    }
     const listing = run('unzip', ['-Z', '-l', archive]);
     assert(!/^l[rwxstST-]{9}\s/m.test(listing), 'Archive must not contain symlinks');
     const extracted = path.join(directory, 'extracted');
@@ -200,6 +201,20 @@ test('actual VSIX server uses an independently provisioned Pi harness outside th
     run('unzip', ['-q', archive, '-d', extracted]);
     const extension = path.join(extracted, 'extension');
     filesBelow(extracted); // Reject symlinks before following any runtime paths.
+    // Load the packaged extension-host runtime and highlighting assets from the archive.
+    run(process.execPath, ['--input-type=module', '-e', `
+      import assert from 'node:assert/strict';
+      import { createRequire } from 'node:module';
+      import { createHighlighter } from 'shiki';
+      const require = createRequire(import.meta.url);
+      const sdk = await require('./out/sdk/piSdkLoader.js').loadPiSdk();
+      assert.equal(typeof sdk.createAgentSessionRuntime, 'function');
+      assert.equal(typeof require('@tauren/shared/sbx/protocol').createProtocolConnection, 'function');
+      await import('vscode-shiki-bridge/internals');
+      const highlighter = await createHighlighter({ langs: ['typescript'], themes: ['dark-plus'] });
+      assert.match(highlighter.codeToHtml('const answer: number = 42;', { lang: 'typescript', theme: 'dark-plus' }), /<span/);
+      highlighter.dispose();
+    `], { cwd: extension });
     const kit = path.join(extension, 'resources/generated-sbx-kit');
     const server = path.join(kit, 'files/home/.tauren/server');
     const main = path.join(server, 'dist/main.js');
