@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-20
+
 - Reduce the VSIX package size by excluding development-only dependencies while retaining the bundled Pi runtime, syntax highlighting, and sandbox kits.
 
 ## [0.1.0] - 2026-11-20
