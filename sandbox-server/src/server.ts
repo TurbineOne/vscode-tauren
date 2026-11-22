@@ -1,8 +1,10 @@
+import { EventEmitter } from 'node:events';
 import * as fs from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import {
   createAgentSessionRuntime, createAgentSessionServices, createAgentSessionFromServices,
-  getAgentDir, SessionManager, SettingsManager, VERSION, type AgentSessionRuntime
+  getAgentDir, getPackageDir, SessionManager, SettingsManager, VERSION, type AgentSessionRuntime
 } from '@earendil-works/pi-coding-agent';
 import { ErrorCodes, ResponseError, type MessageConnection } from '@tauren/shared/sbx/protocol';
 import { registerRuntimeControls } from './runtimeControls.js';
@@ -79,6 +81,59 @@ async function validateInitializeParams(input: unknown): Promise<ServerConfigura
     throw new ResponseError(TaurenErrorCodes.IncompatibleRuntime,
       `Invalid workspace/session configuration: ${error instanceof Error ? error.message : String(error)}`);
   }
+}
+
+let httpDispatcherConfigured = false;
+
+/**
+ * Install Pi's proxy-tunneling HTTP dispatcher onto `globalThis.fetch` before
+ * creating an SDK session.
+ *
+ * The `pi` CLI runs an internal `configureHttpDispatcher()` step during CLI
+ * startup, whereas the public SDK entrypoints (`createAgentSessionRuntime` and
+ * `createAgentSessionServices`) do not. Inside Docker Sandboxes, Node's built-in
+ * `NODE_USE_ENV_PROXY=1` defaults to `proxyTunnel: false` for `http://` URLs,
+ * whereas the sandbox proxy only replaces sentinel API keys with real host
+ * credentials on `CONNECT`-tunneled connections. Configuring Pi's `undici`
+ * `EnvHttpProxyAgent` with `proxyTunnel: true` and installing its `fetch`
+ * matches CLI `pi` behavior for both SDK calls and provider extensions.
+ */
+function configureSandboxHttpDispatcher(packageDirectory: string): void {
+  if (httpDispatcherConfigured) return;
+  const piRequire = createRequire(path.join(packageDirectory, 'package.json'));
+  const undici = piRequire('undici') as {
+    Client: new (origin: unknown, options?: unknown) => unknown;
+    Pool: new (origin: unknown, options?: Record<string, unknown>) => unknown;
+    EnvHttpProxyAgent: new (options: Record<string, unknown>) => unknown;
+    setGlobalDispatcher: (dispatcher: unknown) => void;
+    install?: () => void;
+  };
+  // Attach a no-op error listener so idle pooled-socket errors do not surface as uncaught EventEmitter errors.
+  const ignoreError = () => {};
+  const withErrorListener = <T>(dispatcher: T): T => {
+    if (dispatcher instanceof EventEmitter) {
+      EventEmitter.prototype.on.call(dispatcher, 'error', ignoreError);
+    }
+    return dispatcher;
+  };
+  const createClient = (origin: unknown, options?: unknown) =>
+    withErrorListener(new undici.Client(origin, options));
+  const createOriginDispatcher = (origin: unknown, options: Record<string, unknown> = {}) =>
+    options.connections === 1
+      ? createClient(origin, options)
+      : withErrorListener(new undici.Pool(origin, { ...options, factory: createClient }));
+  const dispatcher = withErrorListener(new undici.EnvHttpProxyAgent({
+    allowH2: false,
+    proxyTunnel: true,
+    bodyTimeout: 300_000,
+    headersTimeout: 300_000,
+    connect: { autoSelectFamilyAttemptTimeout: 2_000 },
+    clientFactory: createClient,
+    factory: createOriginDispatcher
+  }));
+  undici.setGlobalDispatcher(dispatcher);
+  undici.install?.();
+  httpDispatcherConfigured = true;
 }
 
 /** Stop SDK work, including process groups owned by the built-in bash tool. */
@@ -165,12 +220,24 @@ export function registerServer(connection: MessageConnection, serverVersion: str
     process.chdir(config.workspace);
     process.env.PI_CODING_AGENT_SESSION_DIR = config.sessionDirectory;
     const agentDir = getAgentDir();
+    // Honor Pi's optional httpProxy setting before installing the proxy dispatcher, matching CLI startup order.
+    const initialSettings = SettingsManager.create(config.workspace, agentDir) as SettingsManager & {
+      getHttpProxy?: () => string | undefined;
+    };
+    const configuredProxy = initialSettings.getHttpProxy?.()?.trim();
+    if (configuredProxy) {
+      process.env.HTTP_PROXY ??= configuredProxy;
+      process.env.HTTPS_PROXY ??= configuredProxy;
+    }
+    configureSandboxHttpDispatcher(getPackageDir());
     const manager = config.sessionFile
       ? SessionManager.open(config.sessionFile, config.sessionDirectory, config.workspace)
       : SessionManager.create(config.workspace, config.sessionDirectory);
     runtime = await createAgentSessionRuntime(async options => {
       process.chdir(config.workspace);
-      const settingsManager = SettingsManager.create(options.cwd, options.agentDir);
+      const settingsManager = options.cwd === config.workspace && options.agentDir === agentDir
+        ? initialSettings
+        : SettingsManager.create(options.cwd, options.agentDir);
       const services = await createAgentSessionServices({ cwd: options.cwd, agentDir: options.agentDir, settingsManager });
       const created = await createAgentSessionFromServices({ services, sessionManager: options.sessionManager,
         sessionStartEvent: options.sessionStartEvent });
@@ -252,7 +319,7 @@ export function registerServer(connection: MessageConnection, serverVersion: str
     cancelInteractions: () => ui.cancelInteractions()
   }));
   capabilities.push(...ui.capabilityMethods);
-  capabilities.push(...registerRuntimeControls(connection, active, diagnostic));
+  capabilities.push(...registerRuntimeControls(connection, active, diagnostic, event));
   // Restore from SDK history and rerun custom renderers, never from a cached
   // host transcript. Rendered text is presentation only, not persisted session data.
   connection.onRequest(Requests.getMessages, () => {
