@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -244,7 +244,7 @@ test('initialize validates JSON parameter types and permits correction without a
   } finally { await f.close(); }
 });
 
-for (const invalid of ['relative workspace', 'missing workspace', 'relative sessions', 'sessions inside workspace',
+for (const invalid of ['relative workspace', 'missing workspace', 'relative sessions', 'missing sessions', 'sessions inside workspace',
   'relative sessionFile', 'missing sessionFile', 'sessionFile outside sessions'] as const) {
   test(`initialize rejects ${invalid}`, testOptions, async () => {
     const f = await fixture();
@@ -255,6 +255,7 @@ for (const invalid of ['relative workspace', 'missing workspace', 'relative sess
         case 'relative workspace': params.workspace = 'workspace'; break;
         case 'missing workspace': params.workspace = path.join(f.directory, 'missing'); break;
         case 'relative sessions': params.sessionDirectory = 'sessions'; break;
+        case 'missing sessions': params.sessionDirectory = path.join(f.directory, 'missing-sessions'); break;
         case 'sessions inside workspace': params.sessionDirectory = path.join(f.workspace, 'sessions'); break;
         case 'relative sessionFile': params.sessionFile = 'session.jsonl'; break;
         case 'missing sessionFile': params.sessionFile = path.join(f.sessionDirectory, 'missing.jsonl'); break;
@@ -266,6 +267,9 @@ for (const invalid of ['relative workspace', 'missing workspace', 'relative sess
         }
       }
       await rejectsCode(s.request(s.client.sendRequest(Requests.initialize, params)), TaurenErrorCodes.IncompatibleRuntime);
+      if (invalid === 'missing sessions') {
+        await assert.rejects(stat(params.sessionDirectory), { code: 'ENOENT' });
+      }
     } finally { await f.close(); }
   });
 }

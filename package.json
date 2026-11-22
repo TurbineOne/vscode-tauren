@@ -479,7 +479,14 @@
         },
         "tauren.sbx.commandProvider": {
           "type": "object",
-          "description": "Optional host executable and argument list that describe how to create a Docker sandbox. Reset this setting to use Tauren's built-in provider. Tauren runs the executable only in a trusted workspace and does not parse a shell command.",
+          "default": {
+            "executable": "/usr/bin/printf",
+            "args": [
+              "%s\n",
+              "{\"version\":1,\"command\":[\"sbx\",\"create\"],\"agent\":\"@tauren/bundled-pi-kit\",\"workspaces\":[],\"options\":{\"no-input\":true}}"
+            ]
+          },
+          "description": "Host executable and arguments that print a version 1 Docker Sandboxes command specification as JSON, such as `pi-sbx command`. Values defined by the provider, including `options.name` and `options.env.PI_CODING_AGENT_SESSION_DIR`, are used instead of Tauren's generated defaults. The default prints the specification for the bundled Pi sandbox kit (`@tauren/bundled-pi-kit`). The provider runs only in a trusted workspace, without a shell.",
           "required": [
             "executable",
             "args"
@@ -501,12 +508,12 @@
         "tauren.sbx.storageRoot": {
           "type": "string",
           "default": "~/.tauren",
-          "description": "Host directory for Docker Sandboxes sessions. Use an absolute POSIX path or a path starting with ~/."
+          "description": "Default host directory for Docker Sandboxes sessions when the command provider does not define `PI_CODING_AGENT_SESSION_DIR`. Use an absolute POSIX path or a path starting with ~/."
         },
         "tauren.sbx.sandboxName": {
           "type": "string",
           "default": "",
-          "description": "Docker sandbox name override. Leave empty to derive the name from the workspace folder. An override must be 1–63 lowercase letters, digits, or hyphens and start with a letter or digit."
+          "description": "Docker sandbox name override. Leave empty to use `options.name` from the command provider or derive the name from the workspace folder. An override must be 1–63 ASCII letters, digits, underscores, dots, or hyphens, start with a letter or digit, and not end with .sbx."
         },
         "tauren.outputColors": {
           "type": "boolean",

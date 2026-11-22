@@ -20,3 +20,23 @@ test('server launch fixes remote cwd and session environment without shell inter
     assert.throws(() => buildServerLaunchCommand({ ...options, [key]: '/bad\0path' }), /absolute remote POSIX path/);
   }
 });
+
+test('server launch quotes provider environment variables and preserves sessionDirectory precedence', () => {
+  const options = {
+    nodePath: '/usr/bin/node',
+    serverPath: '/home/agent/.tauren/server/dist/main.js',
+    workspace: '/workspace',
+    sessionDirectory: '/resolved/sessions',
+    env: {
+      PI_CODING_AGENT_DIR: "/agent dir/'quoted'; $(nope)",
+      PI_CODING_AGENT_SESSION_DIR: '/stale/sessions'
+    }
+  };
+  assert.equal(
+    buildServerLaunchCommand(options),
+    "cd '/workspace' && exec env 'PI_CODING_AGENT_DIR=/agent dir/'\\''quoted'\\''; $(nope)' 'PI_CODING_AGENT_SESSION_DIR=/resolved/sessions' '/usr/bin/node' '/home/agent/.tauren/server/dist/main.js'"
+  );
+  assert.throws(() => buildServerLaunchCommand({ ...options, env: { 'BAD-NAME': '1' } }), /Invalid remote environment/);
+  assert.throws(() => buildServerLaunchCommand({ ...options, env: { GOOD: 'bad\0value' } }), /Invalid remote environment/);
+  assert.throws(() => buildServerLaunchCommand({ ...options, env: { API_KEY: 'secret' } }), /credential/);
+});

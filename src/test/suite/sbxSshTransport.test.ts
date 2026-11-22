@@ -135,6 +135,7 @@ suite('sbx SSH transport', function () {
     await pending;
     await transport.dispose(false);
     assert.match(transport.stderr, /check remote paths/);
+    assert.doesNotMatch(transport.stderr, /check server framing/);
   });
 
   test('malformed JSON frames reject pending requests and clean up the child', async () => {

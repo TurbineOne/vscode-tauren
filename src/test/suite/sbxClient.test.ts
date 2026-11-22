@@ -396,6 +396,21 @@ suite('SBX client malformed/failed server boundaries', function () {
     finally { await fixture.close(); }
   });
 
+  test('startup failure does not emit a false disconnect or lock out retries', async () => {
+    const fixture = await createFixture('missing-server');
+    try {
+      const client = fixture.client();
+      const errors: string[] = [];
+      client.onError(error => errors.push(error));
+      await assert.rejects(
+        client.getState(),
+        /Sandbox server handshake failed.*does not contain the Tauren server.*sbx rm sbx-client-fixture/
+      );
+      assert.deepEqual(errors, []);
+      assert.equal(client.isDisconnected(), false);
+    } finally { await fixture.close(); }
+  });
+
   test('reports malformed event payload and disconnects without delivering it', async () => {
     const fixture = await createFixture('invalid-event');
     try {

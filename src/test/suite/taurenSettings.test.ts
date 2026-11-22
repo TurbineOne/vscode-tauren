@@ -1,7 +1,10 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
+import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
 import path from 'node:path';
 import { createConfiguredAgentClient } from '../../taurenChatViewProvider';
+import { resolveSbxWorkspace } from '../../sbx/extensionClient';
 import { SbxClient } from '../../sbx/sbxClient';
 import { PiSdkClient } from '../../sdk/piSdkClient';
 import { KwardClient } from '../../kward/kwardClient';
@@ -34,7 +37,9 @@ suite('Tauren settings', () => {
   test('uses the SBX defaults without an explicit provider or name', async () => {
     await withGlobalSettings({ backend: 'sbx', 'sbx.commandProvider': undefined, 'sbx.storageRoot': undefined, 'sbx.sandboxName': '' }, () => {
       assert.strictEqual(getBackendSetting(), 'sbx');
-      assert.deepStrictEqual(getSbxSettings(), { storageRoot: '~/.tauren' });
+      const declaredDefault = vscode.workspace.getConfiguration('tauren').inspect('sbx.commandProvider')?.defaultValue;
+      assert.ok(declaredDefault);
+      assert.deepStrictEqual(getSbxSettings(), { provider: declaredDefault, storageRoot: '~/.tauren' });
     });
   });
 
@@ -45,10 +50,62 @@ suite('Tauren settings', () => {
     });
   });
 
+  test('resolves SBX workspace session store and sandbox name from the configured command provider', async () => {
+    const extensionRoot = path.resolve(__dirname, '../../..');
+    const tempRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'tauren-sbx-settings-')));
+    try {
+      const workspace = path.join(tempRoot, 'My Workspace');
+      const providerAgents = path.join(tempRoot, 'pi-sbx', 'agents');
+      const providerSessions = path.join(tempRoot, 'pi-sbx', 'sessions');
+      const providerKit = path.join(tempRoot, 'pi-sbx', 'kit');
+      await Promise.all([workspace, providerAgents, providerSessions, providerKit].map(dir => fs.mkdir(dir, { recursive: true })));
+
+      const providerSpec = {
+        version: 1,
+        command: ['sbx', 'create'],
+        agent: '@tauren/bundled-pi-kit',
+        workspaces: [workspace, providerAgents, providerSessions],
+        options: {
+          kit: [providerKit],
+          name: 'Custom_From.Provider',
+          env: {
+            PI_CODING_AGENT_DIR: providerAgents,
+            PI_CODING_AGENT_SESSION_DIR: providerSessions
+          }
+        }
+      };
+      const provider = {
+        executable: process.execPath,
+        args: ['-e', `process.stderr.write('staging ready\\n'); process.stdout.write(${JSON.stringify(`${JSON.stringify(providerSpec)}\n`)});`]
+      };
+      const diagnostics: string[] = [];
+
+      await withGlobalSettings({
+        backend: 'sbx',
+        'sbx.commandProvider': provider,
+        'sbx.storageRoot': path.join(tempRoot, 'unused-tauren-store'),
+        'sbx.sandboxName': ''
+      }, async () => {
+        const resolved = await resolveSbxWorkspace(workspace, extensionRoot, text => diagnostics.push(text));
+        assert.strictEqual(resolved.workspace, workspace);
+        assert.strictEqual(resolved.sandboxName, 'Custom_From.Provider');
+        assert.strictEqual(resolved.sessionDirectory, providerSessions);
+        assert.deepStrictEqual(resolved.env, {
+          PI_CODING_AGENT_DIR: providerAgents,
+          PI_CODING_AGENT_SESSION_DIR: providerSessions
+        });
+        assert.deepStrictEqual(diagnostics, ['staging ready\n']);
+      });
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   test('reports malformed SBX settings only when read for SBX', async () => {
     const malformed = [
       ['sbx.commandProvider', 'provider --profile dev'],
       ['sbx.commandProvider', {}],
+      ['sbx.commandProvider', { executable: 'provider' }],
       ['sbx.commandProvider', { executable: 'provider', args: [1] }],
       ['sbx.storageRoot', false],
       ['sbx.sandboxName', ['test']]
@@ -102,14 +159,14 @@ suite('Tauren settings', () => {
   });
 });
 
-async function withGlobalSettings(values: Record<string, unknown>, callback: () => void): Promise<void> {
+async function withGlobalSettings(values: Record<string, unknown>, callback: () => void | Promise<void>): Promise<void> {
   const configuration = vscode.workspace.getConfiguration('tauren');
   const previous = Object.keys(values).map((key) => [key, configuration.inspect(key)?.globalValue] as const);
   try {
     for (const [key, value] of Object.entries(values)) {
       await configuration.update(key, value, vscode.ConfigurationTarget.Global);
     }
-    callback();
+    await callback();
   } finally {
     for (const [key, value] of previous) {
       await configuration.update(key, value, vscode.ConfigurationTarget.Global);

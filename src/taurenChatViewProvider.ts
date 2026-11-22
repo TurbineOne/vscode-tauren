@@ -1,5 +1,6 @@
 import * as path from 'node:path';
 import { realpath } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import * as vscode from 'vscode';
 import {
   createWebviewHtml,
@@ -224,10 +225,7 @@ export class TaurenChatViewProvider implements vscode.WebviewViewProvider, vscod
       getRejectEditWriteOutsideWorkspace: () => getRejectEditWriteOutsideWorkspaceSetting(),
       onExtensionLoadError: (path, error) => this.writeExtensionLoadError(path, error),
       sbx: { extensionDirectory: this.extensionUri.fsPath, workspace: this.workspaceCwdProvider(),
-        onDiagnostic: message => {
-          this.sandboxOutputChannel ??= vscode.window.createOutputChannel('Tauren Docker Sandboxes');
-          this.sandboxOutputChannel.appendLine(message);
-        } }
+        onDiagnostic: message => this.writeSandboxDiagnostic(message) }
     }));
     const initialSessionFile = this.sanitizeInitialSessionFile(readCurrentSessionFile(this.workspaceState));
 
@@ -376,7 +374,9 @@ export class TaurenChatViewProvider implements vscode.WebviewViewProvider, vscod
     const timer = this.perf.start('sessionList.load');
     let metrics: { sessionCount: number; totalBytes: number; cacheHits: number; cacheMisses: number } | undefined;
     const backend = getBackendSetting();
-    const scope = backend === 'sbx' ? await resolveSbxWorkspace(cwd) : undefined;
+    const scope = backend === 'sbx'
+      ? await resolveSbxWorkspace(cwd, this.extensionUri.fsPath, message => this.writeSandboxDiagnostic(message))
+      : undefined;
     const sessions = await listAgentSessions({
       backend,
       sbxSessionStore: scope?.sessionDirectory,
@@ -744,7 +744,12 @@ export class TaurenChatViewProvider implements vscode.WebviewViewProvider, vscod
       selectionStart: message.selectionStart,
       selectionEnd: message.selectionEnd
     };
-    const result = await this.controller.getComposerCompletions(request, controller.signal);
+    let result: Awaited<ReturnType<TaurenSessionManager['getComposerCompletions']>>;
+    try {
+      result = await this.controller.getComposerCompletions(request, controller.signal);
+    } catch {
+      return;
+    }
     if (controller.signal.aborted || this.pendingComposerCompletion !== pending || this.webviewView !== webview || !result) {
       return;
     }
@@ -760,7 +765,12 @@ export class TaurenChatViewProvider implements vscode.WebviewViewProvider, vscod
 
   private async applyComposerCompletion(message: Extract<WebviewMessage, { type: 'applyComposerCompletion' }>): Promise<void> {
     const application: ComposerCompletionApplication = { id: message.id, revision: message.revision, itemId: message.itemId };
-    const result = await this.controller.applyComposerCompletion(application);
+    let result: Awaited<ReturnType<TaurenSessionManager['applyComposerCompletion']>>;
+    try {
+      result = await this.controller.applyComposerCompletion(application);
+    } catch {
+      return;
+    }
     if (result) {
       void this.webviewView?.webview.postMessage({ type: 'composerCompletionApplied', ...result });
     }
@@ -878,7 +888,9 @@ export class TaurenChatViewProvider implements vscode.WebviewViewProvider, vscod
         const backend = getBackendSetting();
         let match;
         try {
-          const scope = backend === 'sbx' ? await resolveSbxWorkspace(cwd) : undefined;
+          const scope = backend === 'sbx'
+            ? await resolveSbxWorkspace(cwd, this.extensionUri.fsPath, message => this.writeSandboxDiagnostic(message))
+            : undefined;
           match = await traceOrigin(createTraceOriginInputs(context, editor.document), {
             backend,
             cwd,
@@ -997,8 +1009,7 @@ export class TaurenChatViewProvider implements vscode.WebviewViewProvider, vscod
     if (message.type === 'ready') {
       this.webviewReady = true;
       this.controller.setCustomUiViewAttached(true);
-      const capabilities = await this.controller.getComposerCompletionCapabilities();
-      void this.webviewView?.webview.postMessage({ type: 'composerCompletionCapabilities', ...capabilities });
+      void this.postComposerCompletionCapabilities();
       this.codeRenderer.warmup();
       await this.controller.handleWebviewMessage(message);
       this.postInputFocusSoon();
@@ -1022,6 +1033,15 @@ export class TaurenChatViewProvider implements vscode.WebviewViewProvider, vscod
     }
 
     await this.controller.handleWebviewMessage(message);
+  }
+
+  private async postComposerCompletionCapabilities(): Promise<void> {
+    try {
+      const capabilities = await this.controller.getComposerCompletionCapabilities();
+      void this.webviewView?.webview.postMessage({ type: 'composerCompletionCapabilities', ...capabilities });
+    } catch {
+      // Session metadata refresh reports backend startup failures to the transcript.
+    }
   }
 
   private handlePerfEvent(event: WebviewPerfEvent): void {
@@ -1359,6 +1379,11 @@ export class TaurenChatViewProvider implements vscode.WebviewViewProvider, vscod
     this.perfOutputChannel.appendLine(line);
   }
 
+  private writeSandboxDiagnostic(message: string): void {
+    this.sandboxOutputChannel ??= vscode.window.createOutputChannel('Tauren Docker Sandboxes');
+    this.sandboxOutputChannel.appendLine(message);
+  }
+
   private writeExtensionLoadError(path: string, error: string): void {
     if (!this.extensionLoadOutputChannel) {
       this.extensionLoadOutputChannel = vscode.window.createOutputChannel('Tauren Extensions');
@@ -1421,7 +1446,7 @@ export class TaurenChatViewProvider implements vscode.WebviewViewProvider, vscod
     }
 
     if (getBackendSetting() === 'sbx') {
-      const scope = await resolveSbxWorkspace(this.workspaceCwdProvider());
+      const scope = await resolveSbxWorkspace(this.workspaceCwdProvider(), this.extensionUri.fsPath, message => this.writeSandboxDiagnostic(message));
       const discovery = await discoverSbxSessionFiles({ sbxSessionStore: scope.sessionDirectory, sbxWorkspace: scope.workspace }, [sessionPath]);
       let associated = false;
       for await (const _record of discovery.readRecords(sessionPath)) { associated = true; break; }
@@ -1816,5 +1841,8 @@ function getWebviewLocalResourceRoots(extensionUri: vscode.Uri): vscode.Uri[] {
 
 function readCurrentSessionFile(workspaceState: vscode.Memento | undefined): string | undefined {
   const value = workspaceState?.get<unknown>(currentSessionFileStorageKey());
+  if (!existsSync(value as string)) {
+    return undefined;
+  }
   return typeof value === 'string' && value ? value : undefined;
 }

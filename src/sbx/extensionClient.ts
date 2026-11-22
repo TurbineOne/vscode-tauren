@@ -3,8 +3,9 @@ import path from 'node:path';
 import * as vscode from 'vscode';
 import type { AgentClientOptions } from '../agent/types';
 import { getSbxSettings } from '../settings/taurenSettings';
-import { packagedSandboxKits } from './commandProvider';
-import { resolveSandboxPaths } from './configuration';
+import { composeSandboxCommand } from './commandComposition';
+import { defaultCommandProvider, packagedSandboxKits, runCommandProvider, type PiSbxCommandSpecV1 } from './commandProvider';
+import { resolveExistingWorkspace } from './configuration';
 import { SbxClient } from './sbxClient';
 
 /** SBX needs a real project mount. Never substitute the Pi home-directory fallback. */
@@ -13,9 +14,36 @@ function requireWorkspace(workspace: string | undefined): string {
   return workspace;
 }
 
-/** Resolve the same store for discovery and the client, without starting a VM. */
-export function resolveSbxWorkspace(workspace: string | undefined) {
-  return resolveSandboxPaths({ ...getSbxSettings(), workspace: requireWorkspace(workspace) });
+/** Resolve the same store and identity for discovery and the client, without starting a VM.
+ * When a command provider is configured, its JSON specification defines values such as
+ * options.name and options.env.PI_CODING_AGENT_SESSION_DIR instead of Tauren's defaults.
+ */
+export async function resolveSbxWorkspace(
+  workspace: string | undefined,
+  extensionDirectory: string,
+  onDiagnostic?: (message: string) => void
+) {
+  const canonicalWorkspace = await resolveExistingWorkspace(requireWorkspace(workspace));
+  const settings = getSbxSettings();
+  const kits = packagedSandboxKits(extensionDirectory);
+  let spec: PiSbxCommandSpecV1;
+  if (settings.provider) {
+    const result = await runCommandProvider(settings.provider, {
+      workspace: canonicalWorkspace,
+      workspaceTrusted: vscode.workspace.isTrusted
+    });
+    spec = result.response;
+    if (result.stderr) onDiagnostic?.(result.stderr);
+  } else {
+    spec = defaultCommandProvider(kits.sandboxKitDirectory);
+  }
+  const composed = await composeSandboxCommand(spec, { ...settings, workspace: canonicalWorkspace, ...kits });
+  return {
+    workspace: composed.workspace,
+    sandboxName: composed.sandboxName,
+    sessionDirectory: composed.sessionDirectory,
+    env: composed.env
+  };
 }
 
 /** Use the installed mixin's manifest, not the extension package version, to

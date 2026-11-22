@@ -18,8 +18,9 @@ suite('SBX configuration', () => {
   test('basename collisions intentionally share identity, with strict explicit overrides', () => {
     assert.strictEqual(normalizeSandboxName('/one/My App'), normalizeSandboxName('/two/My App'));
     assert.strictEqual(normalizeSandboxName('/one/My App', 'project-2'), 'project-2');
+    assert.strictEqual(normalizeSandboxName('/one/My App', 'Upper_App.v2'), 'Upper_App.v2');
     assert.strictEqual(normalizeSandboxName('/', 'explicit'), 'explicit');
-    for (const override of ['', 'Upper', 'with spaces', '-start', 'a_b', '../escape', 'é', 'a'.repeat(64), 'a\0', 'valid\n']) {
+    for (const override of ['', 'with spaces', '-start', '_start', '.start', 'bad.sbx', '../escape', 'é', 'a'.repeat(64), 'a\0', 'valid\n']) {
       assert.throws(() => normalizeSandboxName('/valid', override), /overrides are not normalized/);
     }
   });

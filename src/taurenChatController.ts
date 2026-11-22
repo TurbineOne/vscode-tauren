@@ -451,12 +451,12 @@ export class TaurenChatController {
         await this.slashCommandController.setSessionNameFromWebview(message.name);
         return;
       case 'refreshMetadata':
-        if (!this.session.isBusy) {
+        if (!this.session.isBusy && !this.isClientAwaitingRecovery()) {
           await this.refreshSessionMeta({ startClient: true });
         }
         return;
       case 'refreshSlashCommands':
-        if (!this.session.isBusy) {
+        if (!this.session.isBusy && !this.isClientAwaitingRecovery()) {
           await this.refreshSlashCommands({ startClient: true });
         }
         return;
@@ -711,17 +711,31 @@ export class TaurenChatController {
   }
 
   public async getComposerCompletions(request: ComposerCompletionRequest, signal: AbortSignal): Promise<ComposerCompletionResult | undefined> {
+    if (this.getPiStartupCwdState().status !== 'ready' || this.isClientAwaitingRecovery()) {
+      return undefined;
+    }
     const client = this.getClient();
     return client.getComposerCompletions ? await client.getComposerCompletions(request, signal) : undefined;
   }
 
   public async getComposerCompletionCapabilities(): Promise<ComposerCompletionCapabilities> {
+    if (this.getPiStartupCwdState().status !== 'ready' || this.isClientAwaitingRecovery()) {
+      return { triggerCharacters: [], generation: 0 };
+    }
     return await this.getClient().getComposerCompletionCapabilities?.() ?? { triggerCharacters: [], generation: 0 };
   }
 
   public async applyComposerCompletion(application: ComposerCompletionApplication): Promise<ComposerCompletionApplied | undefined> {
+    if (this.getPiStartupCwdState().status !== 'ready' || this.isClientAwaitingRecovery()) {
+      return undefined;
+    }
     const client = this.getClient();
     return client.applyComposerCompletion ? await client.applyComposerCompletion(application) : undefined;
+  }
+
+  private isClientAwaitingRecovery(): boolean {
+    const client = this.getExistingClient();
+    return Boolean(this.reconnectInFlight || (client && (client.isDisconnected?.() || this.pendingRecoveryClient === client)));
   }
 
   public addPromptContext(context: PiPromptContextInput | PiPromptContextInput[]): void {

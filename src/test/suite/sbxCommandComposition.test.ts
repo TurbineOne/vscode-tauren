@@ -3,290 +3,388 @@ import { access, mkdir, mkdtemp, realpath, rm, symlink } from 'node:fs/promises'
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { composeSandboxCommand, type SandboxCommandConfiguration } from '../../sbx/commandComposition';
-import { defaultCommandProvider, type CommandProviderResult } from '../../sbx/commandProvider';
+import { defaultCommandProvider, runCommandProvider, type PiSbxCommandSpecV1 } from '../../sbx/commandProvider';
 
 suite('sbx command composition', () => {
   let root: string;
-  let config: SandboxCommandConfiguration;
+  let workspace: string;
+  let storageRoot: string;
+  let serverMixinDirectory: string;
   let kit: string;
   let extra: string;
   let other: string;
+  let config: SandboxCommandConfiguration;
 
   setup(async () => {
     root = await realpath(await mkdtemp(path.join(os.tmpdir(), 'tauren composition test ')));
-    config = {
-      sandboxName: 'tauren-test-1',
-      workspace: path.join(root, 'primary workspace'),
-      sessionDirectory: path.join(root, 'session store'),
-      serverMixinDirectory: path.join(root, 'server mixin')
-    };
+    workspace = path.join(root, 'My Project');
+    storageRoot = path.join(root, 'tauren-store');
+    serverMixinDirectory = path.join(root, 'server mixin');
     kit = path.join(root, 'default kit');
     extra = path.join(root, 'additional workspace');
     other = path.join(root, 'other workspace');
-    await Promise.all([config.workspace, config.sessionDirectory, config.serverMixinDirectory, kit, extra, other]
+    await Promise.all([workspace, serverMixinDirectory, kit, extra, other]
       .map(directory => mkdir(directory, { recursive: true })));
+    config = {
+      workspace,
+      storageRoot,
+      serverMixinDirectory
+    };
   });
 
   teardown(async () => {
     if (root) await rm(root, { recursive: true, force: true });
   });
 
-  function response(...argv: string[]): CommandProviderResult { return { version: 1, argv }; }
-  function compose(...argv: string[]) { return composeSandboxCommand(response(...argv), config); }
-  function ownedArgs(): string[] {
-    return ['--name', config.sandboxName, '--kit', config.serverMixinDirectory,
-      '--env', `PI_CODING_AGENT_SESSION_DIR=${config.sessionDirectory}`];
+  function spec(overrides: Partial<PiSbxCommandSpecV1> = {}): PiSbxCommandSpecV1 {
+    return {
+      version: 1,
+      command: ['sbx', 'create'],
+      agent: kit,
+      workspaces: [],
+      options: {},
+      ...overrides
+    };
   }
 
-  test('composes the default provider path with the primary workspace before store and provider mounts', async () => {
+  test('uses pi-sbx command values including options.name, PI_CODING_AGENT_SESSION_DIR, and PI_CODING_AGENT_DIR instead of Tauren defaults', async () => {
+    const providerState = path.join(root, 'pi-sbx-state', 'Custom_Sandbox.1');
+    const providerAgents = path.join(providerState, 'agents');
+    const providerSessions = path.join(providerState, 'sessions');
+    const skillDir = path.join(root, 'skills', 'custom-skill');
+    const providerMixin = path.join(root, 'pi-sbx-kit');
+    await Promise.all([providerAgents, providerSessions, skillDir, providerMixin].map(dir => mkdir(dir, { recursive: true })));
+
+    const providerResponse: PiSbxCommandSpecV1 = {
+      version: 1,
+      command: ['sbx', 'create'],
+      agent: kit,
+      workspaces: [
+        workspace,
+        providerAgents,
+        providerSessions,
+        `${skillDir}:ro`
+      ],
+      options: {
+        kit: [providerMixin],
+        name: 'Custom_Sandbox.1',
+        env: {
+          PI_CODING_AGENT_DIR: providerAgents,
+          PI_CODING_AGENT_SESSION_DIR: providerSessions
+        }
+      }
+    };
+
+    const composed = await composeSandboxCommand(providerResponse, config);
+    assert.strictEqual(composed.sandboxName, 'Custom_Sandbox.1');
+    assert.strictEqual(composed.workspace, workspace);
+    assert.strictEqual(composed.sessionDirectory, providerSessions);
+    assert.deepStrictEqual(composed.env, {
+      PI_CODING_AGENT_DIR: providerAgents,
+      PI_CODING_AGENT_SESSION_DIR: providerSessions
+    });
+    assert.strictEqual(composed.executable, 'sbx');
+    assert.deepStrictEqual(composed.args, [
+      'create',
+      kit,
+      workspace,
+      providerAgents,
+      providerSessions,
+      `${skillDir}:ro`,
+      '--kit', providerMixin,
+      '--kit', serverMixinDirectory,
+      '--name', 'Custom_Sandbox.1',
+      '--env', `PI_CODING_AGENT_DIR=${providerAgents}`,
+      '--env', `PI_CODING_AGENT_SESSION_DIR=${providerSessions}`,
+      '--no-input'
+    ]);
+    await assert.rejects(access(storageRoot), { code: 'ENOENT' });
+  });
+
+  test('composes the built-in default provider using Tauren defaults when provider omits name, workspaces, and session env', async () => {
     const provider = defaultCommandProvider(kit);
-    const original = [...provider.argv];
-    assert.deepStrictEqual(await composeSandboxCommand(provider, config), {
-      executable: 'sbx',
-      args: ['--no-input', 'create', ...ownedArgs(), kit, config.workspace, config.sessionDirectory]
+    const expectedSessionDir = path.join(storageRoot, 'my-project', 'sessions');
+    const composed = await composeSandboxCommand(provider, config);
+    assert.strictEqual(composed.sandboxName, 'my-project');
+    assert.strictEqual(composed.sessionDirectory, expectedSessionDir);
+    assert.deepStrictEqual(composed.env, {
+      PI_CODING_AGENT_SESSION_DIR: expectedSessionDir
     });
-    assert.deepStrictEqual(provider.argv, original, 'composition must not mutate provider argv');
+    assert.strictEqual(composed.executable, 'sbx');
+    assert.deepStrictEqual(composed.args, [
+      'create',
+      kit,
+      workspace,
+      expectedSessionDir,
+      '--kit', serverMixinDirectory,
+      '--name', 'my-project',
+      '--env', `PI_CODING_AGENT_SESSION_DIR=${expectedSessionDir}`,
+      '--no-input'
+    ]);
   });
 
-  test('preserves option/value pairs and order even when options follow positionals', async () => {
-    assert.deepStrictEqual(await compose('sbx', 'create', kit, extra, '--env', 'MODE=two words',
-      '--publish', '8080:80', '--cpus', '2', '--memory', '4G', '--no-input'), {
-      executable: 'sbx',
-      args: ['--no-input', 'create', '--env', 'MODE=two words', '--publish', '8080:80',
-        '--cpus', '2', '--memory', '4G', ...ownedArgs(), kit,
-        config.workspace, config.sessionDirectory, extra]
-    });
+  test('the default settings command produces the same creation command as the built-in provider', async () => {
+    const manifest = require('../../../package.json');
+    const provider = manifest.contributes.configuration.properties['tauren.sbx.commandProvider'].default;
+    const { response } = await runCommandProvider(provider, { workspace, workspaceTrusted: true });
+    assert.deepStrictEqual(
+      await composeSandboxCommand(response, { ...config, sandboxKitDirectory: kit }),
+      await composeSandboxCommand(defaultCommandProvider(kit), config)
+    );
   });
 
-  for (const detach of ['-d', '--detach']) {
-    test(`composes detached run with ${detach} and an absolute sbx executable without executing it`, async () => {
-      // The executable intentionally does not exist. Composition is async for filesystem
-      // canonicalization only: it returns data and must never spawn SBX.
-      const executable = path.join(root, 'not installed', 'sbx');
-      assert.deepStrictEqual(await compose(executable, '--no-input', 'run', kit, detach, '-p', '8081:81', '-m', '512m'), {
-        executable,
-        args: ['--no-input', 'run', detach, '-p', '8081:81', '-m', '512m', ...ownedArgs(),
-          kit, config.workspace, config.sessionDirectory]
-      });
-    });
-  }
+  test('inserts the provider-defined session directory mount when omitted from workspaces', async () => {
+    const customSessions = path.join(root, 'custom-sessions');
+    const composed = await composeSandboxCommand(spec({
+      workspaces: [workspace, `${extra}:ro`],
+      options: {
+        name: 'provider-named',
+        env: { PI_CODING_AGENT_SESSION_DIR: customSessions }
+      }
+    }), config);
+    assert.strictEqual(composed.sandboxName, 'provider-named');
+    assert.strictEqual(composed.sessionDirectory, customSessions);
+    assert.deepStrictEqual(composed.spec.workspaces, [workspace, customSessions, `${extra}:ro`]);
+  });
 
-  test('composes a third-party main kit, repeatable mixins, env, publishes and literal mount forms', async () => {
+  test('derives Tauren fallback session path from provider options.name when PI_CODING_AGENT_SESSION_DIR is omitted', async () => {
+    const composed = await composeSandboxCommand(spec({
+      options: { name: 'Provider_Box' }
+    }), config);
+    const expectedSessions = path.join(storageRoot, 'Provider_Box', 'sessions');
+    assert.strictEqual(composed.sandboxName, 'Provider_Box');
+    assert.strictEqual(composed.sessionDirectory, expectedSessions);
+  });
+
+  test('explicit Tauren sandboxName override replaces provider options.name while honoring provider PI_CODING_AGENT_SESSION_DIR', async () => {
+    const providerSessions = path.join(root, 'staged-sessions');
+    const composed = await composeSandboxCommand(spec({
+      workspaces: [workspace, providerSessions],
+      options: {
+        name: 'provider-name',
+        env: { PI_CODING_AGENT_SESSION_DIR: providerSessions }
+      }
+    }), { ...config, sandboxName: 'explicit-override' });
+    assert.strictEqual(composed.sandboxName, 'explicit-override');
+    assert.strictEqual(composed.sessionDirectory, providerSessions);
+    assert.strictEqual(composed.spec.options.name, 'explicit-override');
+  });
+
+  test('preserves additional sbx create options and absolute sbx executable without invoking sbx', async () => {
+    const executable = path.join(root, 'not installed', 'sbx');
     const mixin = path.join(root, 'third party mixin');
     await mkdir(mixin);
-    const mounts = [`${extra}:ro`, `${other}:/opt/provider-data:ro`];
-    assert.deepStrictEqual(await compose('sbx', 'run', 'vendor/kit:stable', mounts[0],
-      '--kit', 'vendor/feature', '-d', '--kit', mixin, mounts[1], '-e', 'MODE=dev',
-      '--env', 'LABEL=a=b', '-p', '8080:80', '--publish', '9090:90'), {
-      executable: 'sbx',
-      args: ['--no-input', 'run', '--kit', 'vendor/feature', '-d', '--kit', mixin,
-        '-e', 'MODE=dev', '--env', 'LABEL=a=b', '-p', '8080:80', '--publish', '9090:90',
-        ...ownedArgs(), 'vendor/kit:stable', config.workspace, config.sessionDirectory, ...mounts]
-    });
-    assert.deepStrictEqual(await compose('sbx', 'create', kit, `${extra}:/opt/provider-data`), {
-      executable: 'sbx', args: ['--no-input', 'create', ...ownedArgs(), kit,
-        config.workspace, config.sessionDirectory, `${extra}:/opt/provider-data`]
-    });
+    const expectedSessions = path.join(storageRoot, 'my-project', 'sessions');
+    const composed = await composeSandboxCommand(spec({
+      command: [executable, 'create'],
+      agent: 'vendor/kit:stable',
+      workspaces: [workspace, `${extra}:ro`, `${other}:/opt/provider-data:ro`],
+      options: {
+        kit: ['vendor/feature', mixin],
+        env: { MODE: 'two words', LABEL: 'a=b' },
+        publish: ['8080:80', '9090:90'],
+        cpus: 2,
+        memory: '4G',
+        clone: false
+      }
+    }), config);
+
+    assert.strictEqual(composed.executable, executable);
+    assert.deepStrictEqual(composed.args, [
+      'create',
+      'vendor/kit:stable',
+      workspace,
+      expectedSessions,
+      `${extra}:ro`,
+      `${other}:/opt/provider-data:ro`,
+      '--publish', '8080:80',
+      '--publish', '9090:90',
+      '--cpus', '2',
+      '--memory', '4G',
+      '--kit', 'vendor/feature',
+      '--kit', mixin,
+      '--kit', serverMixinDirectory,
+      '--name', 'my-project',
+      '--env', 'MODE=two words',
+      '--env', 'LABEL=a=b',
+      '--env', `PI_CODING_AGENT_SESSION_DIR=${expectedSessions}`,
+      '--no-input'
+    ]);
   });
 
-  test('accepts the same name once without inserting a second name', async () => {
-    assert.deepStrictEqual(await compose('sbx', 'create', kit, '--name', config.sandboxName), {
-      executable: 'sbx',
-      args: ['--no-input', 'create', '--name', config.sandboxName, '--kit', config.serverMixinDirectory,
-        '--env', `PI_CODING_AGENT_SESSION_DIR=${config.sessionDirectory}`, kit,
-        config.workspace, config.sessionDirectory]
-    });
+  test('rejects clone mode in options', async () => {
+    await assert.rejects(
+      composeSandboxCommand(spec({ options: { clone: true } }), config),
+      /Remove --clone/
+    );
   });
 
-  test('rejects a conflicting name', async () => {
-    await assert.rejects(compose('sbx', 'create', kit, '--name', 'someone-else'), /name conflicts/);
+  test('rejects conflicting, read-only, or remapped primary workspace mounts', async () => {
+    for (const badPrimary of [other, `${workspace}:ro`, `${workspace}:/opt/target`]) {
+      await assert.rejects(
+        composeSandboxCommand(spec({ workspaces: [badPrimary] }), config),
+        /primary workspace/
+      );
+    }
   });
 
-  for (const [label, command, options] of [
-    ['name', 'create', ['--name', 'tauren-test-1', '--name', 'tauren-test-1']],
-    ['detach aliases', 'run', ['-d', '--detach']],
-    ['memory aliases', 'create', ['-m', '1g', '--memory', '2g']],
-    ['CPU count', 'create', ['--cpus', '1', '--cpus', '2']],
-    ['no-input', 'create', ['--no-input', '--no-input']]
-  ] as const) {
-    test(`rejects repeated ${label}`, async () => {
-      await assert.rejects(compose('sbx', command, kit, ...options), /Repeated/);
-    });
-  }
-
-  test('rejects no-input repeated across the subcommand boundary', async () => {
-    await assert.rejects(compose('sbx', '--no-input', 'create', kit, '--no-input'), /Repeated --no-input/);
-  });
-
-  test('rejects duplicate environment assignments across aliases', async () => {
-    await assert.rejects(compose('sbx', 'create', kit, '-e', 'MODE=dev', '--env', 'MODE=prod'), /Repeated provider environment/);
-  });
-
-  test('rejects Tauren-owned environment whether explicit or inherited', async () => {
-    for (const value of ['PI_CODING_AGENT_SESSION_DIR', 'PI_CODING_AGENT_SESSION_DIR=/other']) {
-      await assert.rejects(compose('sbx', 'create', kit, '--env', value), /omit Tauren session environment/);
+  test('rejects read-only, remapped, duplicate, or overlapping session directory mounts', async () => {
+    const providerSessions = path.join(root, 'pi-sbx-state', 'sessions');
+    const parent = path.join(root, 'pi-sbx-state');
+    await mkdir(providerSessions, { recursive: true });
+    for (const badMounts of [
+      [workspace, `${providerSessions}:ro`],
+      [workspace, `${providerSessions}:/opt/sessions`],
+      [workspace, providerSessions, providerSessions],
+      [workspace, parent]
+    ]) {
+      await assert.rejects(
+        composeSandboxCommand(spec({
+          workspaces: badMounts,
+          options: { env: { PI_CODING_AGENT_SESSION_DIR: providerSessions } }
+        }), config),
+        /Session directory|Repeated|conflicts/
+      );
     }
   });
 
   test('rejects owned mixins and duplicate provider mixins through canonical symlink paths', async () => {
     const alias = path.join(root, 'server alias');
     const kitAlias = path.join(root, 'kit alias');
-    await Promise.all([symlink(config.serverMixinDirectory, alias), symlink(kit, kitAlias)]);
-    for (const value of [config.serverMixinDirectory, alias]) {
-      await assert.rejects(compose('sbx', 'create', kit, '--kit', value), /omit Tauren server mixin/);
-      await assert.rejects(compose('sbx', 'create', value), /cannot be the main sandbox kit/);
+    await Promise.all([symlink(serverMixinDirectory, alias), symlink(kit, kitAlias)]);
+    for (const value of [serverMixinDirectory, alias]) {
+      await assert.rejects(composeSandboxCommand(spec({ options: { kit: [value] } }), config), /omit Tauren server mixin/);
+      await assert.rejects(composeSandboxCommand(spec({ agent: value }), config), /cannot be the main sandbox kit/);
     }
-    await assert.rejects(compose('sbx', 'create', kit, '--kit', kit, '--kit', kitAlias), /Repeated provider mixin/);
-    await assert.rejects(compose('sbx', 'create', kit, '--kit', 'vendor/extra', '--kit', 'vendor/extra'), /Repeated provider mixin/);
+    await assert.rejects(composeSandboxCommand(spec({ options: { kit: [kit, kitAlias] } }), config), /Repeated provider mixin/);
+    await assert.rejects(composeSandboxCommand(spec({ options: { kit: ['vendor/extra', 'vendor/extra'] } }), config), /Repeated provider mixin/);
   });
 
-  test('rejects owned mount sources including symlinks, alternate targets and broader host mounts', async () => {
+  test('rejects additional workspace mounts that overlap the primary workspace', async () => {
     const alias = path.join(root, 'workspace alias');
-    const storeAlias = path.join(root, 'store alias');
-    await Promise.all([symlink(config.workspace, alias), symlink(config.sessionDirectory, storeAlias)]);
-    for (const mount of [config.workspace, config.sessionDirectory, alias, storeAlias,
-      `${alias}:/opt/disguised:ro`, `${storeAlias}:/opt/store`, root]) {
-      await assert.rejects(compose('sbx', 'create', kit, mount), /conflicts with Tauren-owned/);
+    await symlink(workspace, alias);
+    for (const mount of [workspace, alias, `${alias}:/opt/disguised:ro`, root, `${extra}:${workspace}:ro`, `${extra}:/:ro`]) {
+      await assert.rejects(
+        composeSandboxCommand(spec({ workspaces: [workspace, mount] }), config),
+        /conflicts with Tauren primary workspace/
+      );
     }
   });
 
-  test('rejects provider targets equal to, containing, or nested under either owned mount', async () => {
-    for (const target of [config.workspace, config.sessionDirectory, root, '/',
-      path.join(config.workspace, 'nested'), path.join(config.sessionDirectory, 'nested')]) {
-      await assert.rejects(compose('sbx', 'create', kit, `${extra}:${target}:ro`), /conflicts with Tauren-owned/);
-    }
-  });
-
-  test('rejects repeated canonical mount sources and normalized mount targets', async () => {
+  test('rejects repeated canonical mount sources and overlapping additional mount targets', async () => {
     const alias = path.join(root, 'extra alias');
     await symlink(extra, alias);
-    await assert.rejects(compose('sbx', 'create', kit, `${extra}:/opt/one`, `${alias}:/opt/two`), /Repeated additional workspace/);
-    await assert.rejects(compose('sbx', 'create', kit, `${extra}:/opt/data`, `${other}:/opt/unused/../data`), /Repeated additional workspace/);
+    await assert.rejects(
+      composeSandboxCommand(spec({ workspaces: [workspace, `${extra}:/opt/one`, `${alias}:/opt/two`] }), config),
+      /Repeated additional workspace/
+    );
+    await assert.rejects(
+      composeSandboxCommand(spec({ workspaces: [workspace, `${extra}:/opt/data`, `${other}:/opt/unused/../data`] }), config),
+      /Repeated additional workspace/
+    );
+    await assert.rejects(
+      composeSandboxCommand(spec({ workspaces: [workspace, `${extra}:/opt/data`, `${other}:/opt/data/nested`] }), config),
+      /Overlapping additional workspace/
+    );
   });
 
-  test('rejects overlapping targets between additional provider mounts', async () => {
-    await assert.rejects(compose('sbx', 'create', kit, `${extra}:/opt/data`, `${other}:/opt/data/nested`), /workspace/);
-  });
-
-  test('canonicalizes owned paths through symlinks and resolves not-yet-created session parents', async () => {
+  test('canonicalizes owned and provider paths through symlinks without creating directories', async () => {
     const alias = path.join(root, 'root alias');
     await symlink(root, alias);
-    const sessionDirectory = path.join(alias, 'future', 'sessions');
-    const result = await composeSandboxCommand(response('sbx', 'create', kit), {
-      ...config, workspace: path.join(alias, 'primary workspace'), sessionDirectory
+    const futureSessions = path.join(alias, 'future', 'sessions');
+    const futureAgents = path.join(alias, 'future', 'agents');
+    const composed = await composeSandboxCommand(spec({
+      options: {
+        env: {
+          PI_CODING_AGENT_DIR: futureAgents,
+          PI_CODING_AGENT_SESSION_DIR: futureSessions
+        }
+      }
+    }), {
+      ...config,
+      workspace: path.join(alias, 'My Project')
     });
     const canonicalSessions = path.join(root, 'future', 'sessions');
-    assert.deepStrictEqual(result.args, ['--no-input', 'create', '--name', config.sandboxName,
-      '--kit', config.serverMixinDirectory, '--env', `PI_CODING_AGENT_SESSION_DIR=${canonicalSessions}`,
-      kit, config.workspace, canonicalSessions]);
+    const canonicalAgents = path.join(root, 'future', 'agents');
+    assert.strictEqual(composed.workspace, workspace);
+    assert.strictEqual(composed.sessionDirectory, canonicalSessions);
+    assert.strictEqual(composed.env.PI_CODING_AGENT_DIR, canonicalAgents);
     await assert.rejects(access(canonicalSessions), { code: 'ENOENT' });
   });
 
-  test('rejects a session directory inside the workspace after canonicalization', async () => {
+  test('rejects a provider or fallback session directory inside the workspace after canonicalization', async () => {
     const alias = path.join(root, 'workspace alias');
-    await symlink(config.workspace, alias);
-    await assert.rejects(composeSandboxCommand(response('sbx', 'create', kit), {
-      ...config, sessionDirectory: path.join(alias, 'sessions')
+    await symlink(workspace, alias);
+    await assert.rejects(composeSandboxCommand(spec({
+      options: { env: { PI_CODING_AGENT_SESSION_DIR: path.join(alias, 'sessions') } }
+    }), config), /Session directory must be outside workspace/);
+    await assert.rejects(composeSandboxCommand(spec(), {
+      ...config,
+      sessionDirectory: path.join(alias, 'sessions')
     }), /Session directory must be outside workspace/);
   });
 
-  for (const option of ['--unknown', '--shell', '--name=tauren-test-1', '--memory=1g', '-dp', '-m512m', '--']) {
-    test(`rejects unsupported option syntax ${option}`, async () => {
-      await assert.rejects(compose('sbx', 'create', kit, option), /Unsupported SBX provider option/);
-    });
-  }
-
-  for (const argv of [
-    ['sh', '-c', 'sbx create kit'], ['bash', '-lc', 'sbx create kit'],
-    ['relative/sbx', 'create', 'kit'], ['/bin/not-sbx', 'create', 'kit'],
-    ['sbx create kit', 'create', 'kit']
+  for (const command of [
+    ['sh', 'create'],
+    ['relative/sbx', 'create'],
+    ['/bin/not-sbx', 'create']
   ]) {
-    test(`rejects shell/non-sbx executable ${JSON.stringify(argv[0])}`, async () => {
-      await assert.rejects(compose(...argv), /Provider executable must be sbx/);
+    test(`rejects non-sbx executable ${JSON.stringify(command[0])}`, async () => {
+      await assert.rejects(composeSandboxCommand(spec({ command }), config), /Provider executable must be sbx/);
     });
   }
 
-  for (const argv of [
-    ['sbx', 'exec', 'kit'], ['sbx', '--detach', 'run', 'kit'], ['sbx', 'create -d', 'kit']
+  for (const command of [
+    ['sbx', 'exec'],
+    ['sbx', 'run'],
+    ['sbx', 'create', 'extra']
   ]) {
-    test(`rejects unsupported command placement ${JSON.stringify(argv)}`, async () => {
-      await assert.rejects(compose(...argv), /Provider must describe sbx create or sbx run -d/);
+    test(`rejects unsupported command ${JSON.stringify(command)}`, async () => {
+      await assert.rejects(composeSandboxCommand(spec({ command }), config), /Provider command must describe sbx create/);
     });
   }
 
-  test('rejects string-form commands instead of parsing shell syntax', async () => {
-    const malformed = { version: 1, argv: 'sbx create kit' } as unknown as CommandProviderResult;
-    await assert.rejects(composeSandboxCommand(malformed, config), /argv must be an array/);
-  });
-
-  test('rejects run without detach and detach on create', async () => {
-    await assert.rejects(compose('sbx', 'run', kit), /run must specify -d or --detach/);
-    await assert.rejects(compose('sbx', 'create', '-d', kit), /detach applies only to sbx run/);
-  });
-
-  test('requires a positional main kit, not just a mixin option', async () => {
-    for (const argv of [['sbx', 'create'], ['sbx', 'create', '--kit', kit], ['sbx', 'run', '-d']]) {
-      await assert.rejects(compose(...argv), /must supply a main sandbox kit/);
-    }
-  });
-
-  for (const name of ['', '-leading', 'Uppercase', 'under_score', 'two words', 'a/b', 'x'.repeat(64), 'a;touch bad', 'a\0b']) {
+  for (const name of ['', '-leading', '.leading', '_leading', 'bad.sbx', 'two words', 'a/b', 'x'.repeat(64), 'a;touch bad', 'a\0b']) {
     test(`rejects invalid sandbox name ${JSON.stringify(name)}`, async () => {
-      await assert.rejects(composeSandboxCommand(response('sbx', 'create', kit), { ...config, sandboxName: name }), /Invalid sandbox name/);
+      await assert.rejects(composeSandboxCommand(spec(), { ...config, sandboxName: name }), /Invalid sandbox name/);
+      if (name && !name.includes('\0')) {
+        await assert.rejects(composeSandboxCommand(spec({ options: { name } }), config), /Invalid sandbox name/);
+      }
     });
   }
 
-  test('accepts the one-character and 63-character sandbox name boundaries', async () => {
-    for (const sandboxName of ['a', 'a'.repeat(63)]) {
-      const result = await composeSandboxCommand(response('sbx', 'create', kit), { ...config, sandboxName });
+  test('accepts one-character, 63-character, and pi-sbx character-class sandbox names', async () => {
+    for (const sandboxName of ['a', 'a'.repeat(63), 'My_Repo-1.2']) {
+      const result = await composeSandboxCommand(spec({ options: { name: sandboxName } }), config);
+      assert.strictEqual(result.sandboxName, sandboxName);
       assert.strictEqual(result.args[result.args.indexOf('--name') + 1], sandboxName);
     }
   });
 
-  for (const option of ['--name', '--kit', '--env', '-e', '--publish', '-p', '--cpus', '--memory', '-m']) {
-    test(`rejects missing or flag-shaped value for ${option}`, async () => {
-      await assert.rejects(compose('sbx', 'create', kit, option), /Missing value/);
-      await assert.rejects(compose('sbx', 'create', kit, option, '--no-input'), /Missing value/);
-    });
-  }
-
-  for (const value of ['MODE', '=value', 'BAD-NAME=value', '1MODE=value']) {
-    test(`rejects non-explicit or invalid environment assignment ${value}`, async () => {
-      await assert.rejects(compose('sbx', 'create', kit, '--env', value), /requires explicit KEY=VALUE/);
+  for (const key of ['=value', 'BAD-NAME', '1MODE']) {
+    test(`rejects invalid environment variable name ${key}`, async () => {
+      await assert.rejects(
+        composeSandboxCommand(spec({ options: { env: { [key]: 'value' } } }), config),
+        /Invalid.*environment/
+      );
     });
   }
 
   for (const key of ['API_KEY', 'access_token', 'MY_SECRET', 'PASSWORD', 'credential_file']) {
     test(`rejects credential environment key ${key}`, async () => {
-      await assert.rejects(compose('sbx', 'create', kit, '-e', `${key}=sensitive`), /must not supply credential environment/);
+      await assert.rejects(
+        composeSandboxCommand(spec({ options: { env: { [key]: 'sensitive' } } }), config),
+        /must not supply credential environment/
+      );
     });
   }
 
-  test('rejects invalid CPU counts and memory sizes', async () => {
-    for (const value of ['1.5', 'many', '+2']) {
-      await assert.rejects(compose('sbx', 'create', kit, '--cpus', value), /Invalid CPU count/);
-    }
-    for (const value of ['1.5g', '1gb', 'lots']) {
-      await assert.rejects(compose('sbx', 'create', kit, '-m', value), /Invalid memory size/);
-    }
-  });
-
   test('rejects malformed or nonabsolute additional workspace forms', async () => {
     for (const mount of [`${extra}:`, `${extra}::ro`, `${extra}:/opt/data:rw`, `${extra}:ro:ro`, `${extra}:/opt/data:ro:extra`]) {
-      await assert.rejects(compose('sbx', 'create', kit, mount), /Invalid additional workspace/);
+      await assert.rejects(composeSandboxCommand(spec({ workspaces: [workspace, mount] }), config), /Invalid workspace mount/);
     }
     for (const mount of ['relative/workspace', `${extra}:relative-target`]) {
-      await assert.rejects(compose('sbx', 'create', kit, mount), /absolute POSIX paths without colons/);
-    }
-  });
-
-  test('rejects invalid controlled paths', async () => {
-    for (const field of ['workspace', 'sessionDirectory', 'serverMixinDirectory'] as const) {
-      for (const value of ['relative/path', '/path:with-colon', '/path\0bad']) {
-        await assert.rejects(composeSandboxCommand(response('sbx', 'create', kit), {
-          ...config, [field]: value
-        }), /absolute POSIX paths without colons/);
-      }
+      await assert.rejects(composeSandboxCommand(spec({ workspaces: [workspace, mount] }), config), /absolute POSIX/);
     }
   });
 
@@ -295,12 +393,15 @@ suite('sbx command composition', () => {
     const literal = `two words; $(touch "${sentinel}") & | > * $HOME \`touch shell-sentinel\``;
     const mount = path.join(root, 'data ; $(not-executed) & space');
     await mkdir(mount);
-    assert.deepStrictEqual(await compose('sbx', 'create', literal, '--env', `LABEL=${literal}`, mount), {
-      executable: 'sbx',
-      args: ['--no-input', 'create', '--env', `LABEL=${literal}`, ...ownedArgs(), literal,
-        config.workspace, config.sessionDirectory, mount]
-    });
+    const composed = await composeSandboxCommand(spec({
+      agent: literal,
+      workspaces: [workspace, mount],
+      options: { env: { LABEL: literal } }
+    }), config);
+    assert.ok(composed.args.includes(literal));
+    assert.ok(composed.args.includes(`LABEL=${literal}`));
+    assert.ok(composed.args.includes(mount));
     await assert.rejects(access(sentinel), { code: 'ENOENT' });
-    await assert.rejects(access(path.join(config.workspace, 'shell-sentinel')), { code: 'ENOENT' });
+    await assert.rejects(access(path.join(workspace, 'shell-sentinel')), { code: 'ENOENT' });
   });
 });

@@ -16,9 +16,9 @@ const readJson = async file => JSON.parse(await fs.readFile(file, 'utf8'));
 const setupAgent = `
   const fs = require('node:fs');
   const path = require('node:path');
-  const [extension] = process.argv.slice(1);
+  const [extension, agentOverride] = process.argv.slice(1);
   fs.accessSync(extension, fs.constants.R_OK);
-  const agent = process.env.PI_CODING_AGENT_DIR || path.join(require('node:os').homedir(), '.pi/agent');
+  const agent = agentOverride || process.env.PI_CODING_AGENT_DIR || path.join(require('node:os').homedir(), '.pi/agent');
   fs.mkdirSync(agent, { recursive: true });
   fs.writeFileSync(path.join(agent, 'settings.json'), JSON.stringify({
     defaultProvider: 'packaged-offline', defaultModel: 'scripted', extensions: [extension],
@@ -100,8 +100,13 @@ async function exercisePackagedSandbox({ extension, run, sbx, ssh, t }) {
       assert(!(await listNames()).includes(name), `Test sandbox ${name} already exists. It will not be touched.`);
       const workspace = path.join(tmp, provider);
       const storageRoot = path.join(tmp, 'store');
-      const sessionDirectory = path.join(storageRoot, name, 'sessions');
-      const providerCalls = path.join(tmp, 'provider-calls');
+      const providerStateRoot = path.join(tmp, 'pi-sbx-state');
+      const providerAgents = path.join(providerStateRoot, name, 'agents');
+      const providerSessions = path.join(providerStateRoot, name, 'sessions');
+      const sessionDirectory = provider === 'external'
+        ? providerSessions
+        : path.join(storageRoot, name, 'sessions');
+      const providerCalls = path.join(tmp, `provider-calls-${provider}`);
       const offlineExtension = path.join(workspace, 'packaged-offline-provider.mjs');
       await fs.mkdir(workspace);
       await fs.copyFile(path.join(fixtures, path.basename(offlineExtension)), offlineExtension);
@@ -116,16 +121,28 @@ async function exercisePackagedSandbox({ extension, run, sbx, ssh, t }) {
       const outbound = [];
       const diagnostics = [];
       const credentialLinks = [];
-      const expectedCreate = ['--no-input', 'create', ...(provider === 'external' ? ['--kit', extraMixin] : []),
-        '--name', name, '--kit', serverKit, '--env', `PI_CODING_AGENT_SESSION_DIR=${sessionDirectory}`,
-        provider === 'external' ? externalKit : mainKit, workspace, sessionDirectory];
+      const expectedCreate = provider === 'external'
+        ? [
+          'create', externalKit, workspace, providerAgents, providerSessions,
+          '--kit', extraMixin, '--kit', serverKit, '--name', name,
+          '--env', `PI_CODING_AGENT_DIR=${providerAgents}`,
+          '--env', `PI_CODING_AGENT_SESSION_DIR=${providerSessions}`,
+          '--no-input'
+        ]
+        : [
+          'create', mainKit, workspace, sessionDirectory,
+          '--kit', serverKit, '--name', name,
+          '--env', `PI_CODING_AGENT_SESSION_DIR=${sessionDirectory}`,
+          '--no-input'
+        ];
       const lifecycle = {
-        extensionDirectory: extension, workspace, storageRoot, sandboxName: name,
+        extensionDirectory: extension, workspace, storageRoot,
+        ...(provider === 'default' ? { sandboxName: name } : {}),
         workspaceTrusted: true, clientVersion: manifest.extensionVersion,
         expectedPiVersion: manifest.piSdkVersion, expectedServerVersion: manifest.serverVersion,
         sbxExecutable: sbx, sshExecutable: ssh,
         ...(provider === 'external' ? { provider: { executable: process.execPath, args: [
-          path.join(fixtures, 'packaged-sbx-command-provider.cjs'), externalKit, extraMixin, providerCalls
+          path.join(fixtures, 'packaged-sbx-command-provider.cjs'), externalKit, extraMixin, providerStateRoot, name, providerCalls
         ] } } : {}),
         timeouts: { command: createTimeout, startup: 120_000, handshake: 60_000 },
         onDiagnostic: value => diagnostics.push(value.includes(secret)),
@@ -142,14 +159,13 @@ async function exercisePackagedSandbox({ extension, run, sbx, ssh, t }) {
         },
         async runCommand({ executable, args, cwd }, { timeoutMs, signal } = {}) {
           signal?.throwIfAborted();
-          if (args[0] === '--no-input' && args[1] === 'create') {
+          if (args[0] === 'create') {
             assert.deepEqual(args, expectedCreate, 'Packaged composition must use the expected kits, mounts, and session environment');
-            assert.equal(executable, 'sbx');
+            assert.equal(executable, sbx);
             assert.equal(owned, false, 'Tauren must not recreate an existing test sandbox');
             assert(!(await listNames()).includes(name), `Test sandbox ${name} already exists. It will not be touched.`);
             signal?.throwIfAborted();
-            // Both providers request the literal sbx command. Execute the real
-            // CLI selected by the gate, including when SBX_PATH overrides PATH.
+            // Execute the real CLI selected by the gate, including when SBX_PATH overrides PATH.
             try {
               const result = await runSbx(args, { cwd, timeoutMs });
               diagnostics.push(result.stderr.includes(secret));
@@ -167,7 +183,7 @@ async function exercisePackagedSandbox({ extension, run, sbx, ssh, t }) {
             // Both clients share setup, and Pi discovers the fixture via agent settings.
             const node = result.stdout.trim();
             if (!path.posix.isAbsolute(node) || /[\r\n\0]/.test(node)) return result; // Let lifecycle reject the probe.
-            setup ??= remote([node, '-e', setupAgent, offlineExtension]).catch(error => {
+            setup ??= remote([node, '-e', setupAgent, offlineExtension, ...(provider === 'external' ? [providerAgents] : [])]).catch(error => {
               setup = undefined;
               throw new Error('Could not stage the offline provider in the sandbox Pi agent settings', { cause: error });
             });
@@ -183,11 +199,12 @@ async function exercisePackagedSandbox({ extension, run, sbx, ssh, t }) {
         clients.push(instance);
         return instance;
       }
-      async function assertProviderCalls(count) {
+      async function assertProviderCalls(expectedCreations) {
         if (provider === 'external') {
-          assert.equal(await fs.readFile(providerCalls, 'utf8'), `${workspace}\n`.repeat(count), 'Provider runs once per creation in the workspace');
+          const lines = (await fs.readFile(providerCalls, 'utf8')).trim().split('\n').filter(Boolean);
+          assert(lines.length >= expectedCreations, 'Provider must run to resolve sandbox configuration');
         }
-        assert.equal(creations, count);
+        assert.equal(creations, expectedCreations);
       }
       async function removeSandbox() {
         if (!owned && !failedCreate) return;

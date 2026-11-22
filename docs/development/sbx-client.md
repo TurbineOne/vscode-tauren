@@ -23,12 +23,22 @@ and OpenSSH on the machine running the extension host, then run `sbx login` and
 `sbx setup ssh` there. The backend remains experimental because the production
 inspection schema and packaged flow have not been verified.
 
-The bundled Pi kit is used unless `tauren.sbx.commandProvider` supplies an
-`executable` and an `args` array. See the [provider contract](./sbx-command-provider.md)
-for an example. `tauren.sbx.storageRoot` defaults to `~/.tauren`, and an empty
-`tauren.sbx.sandboxName` derives the name from the canonical workspace basename.
-The Session List Lane and Trace Origin read only the configured sandbox store
-and associated workspace. They do not start a VM or fall back to the local Pi store.
+The default `tauren.sbx.commandProvider` runs `/usr/bin/printf` to print a
+Version 1 command specification for the bundled Pi kit (`@tauren/bundled-pi-kit`),
+which Tauren resolves to the installed kit directory. To use an external
+provider such as `pi-sbx command`, set its `executable` and `args` in
+`settings.json`. Values returned by the provider, including `options.name`,
+`options.env.PI_CODING_AGENT_SESSION_DIR`, and `options.env.PI_CODING_AGENT_DIR`,
+are used instead of Tauren's generated defaults. See the
+[provider contract](./sbx-command-provider.md) for the schema and composition
+rules.
+
+When the command provider omits those values, `tauren.sbx.storageRoot` defaults
+to `~/.tauren`, and an empty `tauren.sbx.sandboxName` derives the name from the
+canonical workspace basename. Setting a nonempty `tauren.sbx.sandboxName`
+explicitly overrides `options.name`. The Session List Lane and Trace Origin read
+only the resolved sandbox session store and associated workspace, so they do not
+start a VM or fall back to the local Pi store.
 
 After a disconnect, use `/reload` to reconnect and restore persisted history.
 Tauren does not replay interrupted prompts. The **Tauren Docker Sandboxes**

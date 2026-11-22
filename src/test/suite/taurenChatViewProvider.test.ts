@@ -398,6 +398,33 @@ suite('TaurenChatViewProvider', () => {
     provider.dispose();
   });
 
+  test('completes webview ready initialization even when completion capabilities fail during backend startup', async () => {
+    const startupFailure = new Error('Sandbox server handshake failed');
+    const failingClient = Object.assign(new FakePiClient({ state: {} }), {
+      getComposerCompletionCapabilities: async () => {
+        throw startupFailure;
+      },
+      getState: async () => {
+        throw startupFailure;
+      }
+    });
+    const provider = new TaurenChatViewProvider(
+      vscode.Uri.file('/extension'),
+      () => failingClient,
+      undefined,
+      undefined,
+      () => '/workspace'
+    );
+    const view = new FakeWebviewView();
+
+    provider.resolveWebviewView(view.asWebviewView());
+    view.webview.fireMessage({ type: 'ready' });
+    await flushPromises();
+
+    assert.ok(lastPostedState(view).messages.some((entry) => entry.role === 'system' && entry.text.includes('Sandbox server handshake failed')));
+    provider.dispose();
+  });
+
   test('adds dropped prompt images from the webview', async () => {
     const provider = new TaurenChatViewProvider(
       vscode.Uri.file('/extension'),

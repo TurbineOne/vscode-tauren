@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createProtocolConnection, Requests, type MessageConnection } from '@tauren/shared/sbx/protocol';
 import { buildServerLaunchCommand, type ServerLaunchOptions } from '@tauren/shared/ssh/serverLaunch';
+import { isValidSandboxName } from './configuration';
 
 export interface SshTransportOptions {
   sandboxName: string;
@@ -18,7 +19,7 @@ const STDERR_LIMIT = 16 * 1024;
 
 /** Shared SSH policy for finite readiness probes and the live protocol channel. */
 export function buildSshArguments(sandboxName: string, remoteCommand: string, connectTimeoutMs = 10_000): string[] {
-  if (!/^[a-z0-9][a-z0-9-]{0,62}(?![\s\S])/.test(sandboxName)) throw new Error('Invalid sandbox name');
+  if (!isValidSandboxName(sandboxName)) throw new Error('Invalid sandbox name');
   duration(connectTimeoutMs, 10_000);
   if (remoteCommand.includes('\0')) throw new Error('SSH remote command must not contain NUL');
   return ['-T', '-o', 'BatchMode=yes', '-o', `ConnectTimeout=${Math.max(1, Math.ceil(connectTimeoutMs / 1000))}`,
@@ -41,6 +42,8 @@ export class SbxSshTransport {
   private stderrTail = '';
   private closed = false;
   private closing = false;
+  private callerDisposed = false;
+  private stdoutEnded = false;
   private disposal?: Promise<void>;
   private readonly subscriptions: { dispose(): void }[] = [];
 
@@ -58,13 +61,19 @@ export class SbxSshTransport {
     child.on('close', this.onChildClose);
     child.stdin.on('error', this.onStreamError);
     child.stdout.on('error', this.onStreamError);
+    child.stdout.once('end', this.onStdoutEnd);
     child.stderr.on('error', this.onStreamError);
     this.connection = createProtocolConnection(child.stdout, child.stdin);
     this.subscriptions.push(
       this.connection.onError(([error]) => this.fail(`Protocol error: ${error.message}`)),
-      this.connection.onClose(() => this.fail('SSH protocol stream closed')),
+      this.connection.onClose(() => {
+        if (!this.stdoutEnded && !this.closed) this.fail('SSH protocol stream closed');
+      }),
       this.connection.onDispose(() => {
-        if (!this.closing) this.fail('SSH protocol connection disposed; check server framing and SSH diagnostics');
+        if (!this.closing) {
+          if (this.stdoutEnded || this.closed) void this.beginDisposal(false);
+          else this.fail('SSH protocol connection disposed; check server framing and SSH diagnostics');
+        }
       })
     );
     // Listen before any caller can issue requests, even if stdout is silent.
@@ -80,9 +89,15 @@ export class SbxSshTransport {
   private readonly onStreamError = (error: Error): void => {
     this.fail(`SSH stdio error for ${this.destination}: ${error.message}`);
   };
+  private readonly onStdoutEnd = (): void => {
+    this.stdoutEnded = true;
+  };
   private readonly onChildClose = (code: number | null, signal: NodeJS.Signals | null): void => {
     this.closed = true;
-    if (!this.closing) this.fail(`SSH to ${this.destination} exited (code ${code}, signal ${signal}). Check sandbox availability and remote Node/server paths.`);
+    if (!this.callerDisposed && !this.stderrTail.trim()) {
+      this.onStderr(`\nSSH to ${this.destination} exited (code ${code}, signal ${signal}). Check sandbox availability and remote Node/server paths.\n`);
+    }
+    if (!this.closing) void this.beginDisposal(false);
   };
 
   private fail(message: string): void {
@@ -134,7 +149,10 @@ export class SbxSshTransport {
    * Pending requests are always rejected by connection disposal, including when
    * the remote server ignores shutdown or the connection was disposed separately.
    */
-  dispose(graceful = true): Promise<void> { return this.beginDisposal(graceful); }
+  dispose(graceful = true): Promise<void> {
+    if (!this.disposal) this.callerDisposed = true;
+    return this.beginDisposal(graceful);
+  }
 
   private beginDisposal(graceful: boolean): Promise<void> {
     if (this.disposal) return this.disposal;
@@ -166,6 +184,7 @@ export class SbxSshTransport {
         this.child.off('close', this.onChildClose);
         this.child.stdin.off('error', this.onStreamError);
         this.child.stdout.off('error', this.onStreamError);
+        this.child.stdout.off('end', this.onStdoutEnd);
         this.child.stderr.off('error', this.onStreamError);
         this.child.stderr.off('data', this.onStderr);
       }

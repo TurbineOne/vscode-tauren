@@ -36,10 +36,9 @@ const defaultSbxStorageRoot = '~/.tauren';
 export function getSbxSettings(): SbxSettings {
   const configuration = vscode.workspace.getConfiguration('tauren');
   const providerSetting = configuration.inspect<unknown>('sbx.commandProvider');
-  // Read only an explicit value. VS Code gives object settings an implicit empty
-  // default, and merging scopes could combine the executable and args from different providers.
-  const providerValue = [providerSetting?.workspaceFolderValue, providerSetting?.workspaceValue, providerSetting?.globalValue]
-    .find((value) => value !== undefined);
+  // Read one scope at a time so an override cannot inherit the executable or args from another provider.
+  const providerValue = [providerSetting?.workspaceFolderValue, providerSetting?.workspaceValue,
+    providerSetting?.globalValue, providerSetting?.defaultValue].find((value) => value !== undefined);
   const storageRoot = configuration.get<unknown>(sbxStorageRootKey, defaultSbxStorageRoot);
   const sandboxName = configuration.get<unknown>(sbxSandboxNameKey, '');
 
@@ -58,7 +57,7 @@ export function getSbxSettings(): SbxSettings {
 }
 
 function validateSbxCommandProvider(value: unknown): CommandProviderConfiguration {
-  const message = 'tauren.sbx.commandProvider must be an object with a nonempty executable and an args array of strings, all without NUL characters. Reset it to use the built-in provider.';
+  const message = 'tauren.sbx.commandProvider must be an object with a nonempty executable and an args array of strings, all without NUL characters. Reset it to use the default provider.';
   if (!value || typeof value !== 'object' || Array.isArray(value)
     || !Object.hasOwn(value, 'executable') || !Object.hasOwn(value, 'args')
     || Object.keys(value).some((key) => key !== 'executable' && key !== 'args')) {
