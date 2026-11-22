@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import http from 'node:http';
+import net from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -43,14 +45,14 @@ async function fixture() {
     protocolVersion: PROTOCOL_VERSION, clientVersion: 'offline-integration-test', workspace, sessionDirectory
   };
 
-  function launch() {
+  function launch(extraEnv: Record<string, string> = {}) {
     // Deliberately do not inherit credentials, provider endpoints, NODE_OPTIONS,
     // or the developer's Pi settings. No fixture switches enter production code.
     const child = spawn(process.execPath, [main], {
       cwd: directory, stdio: ['pipe', 'pipe', 'pipe'],
       env: { PATH: process.env.PATH, HOME: directory, USERPROFILE: directory,
         TMPDIR: directory, NO_COLOR: '1', PI_CODING_AGENT_DIR: agent,
-        PI_CODING_AGENT_SESSION_DIR: wrongSessions }
+        PI_CODING_AGENT_SESSION_DIR: wrongSessions, ...extraEnv }
     });
     let stderr = '';
     child.stderr.setEncoding('utf8');
@@ -648,3 +650,116 @@ for (const termination of ['shutdown', 'EOF', 'SIGTERM'] as const) {
     } finally { await f.close(); }
   });
 }
+
+test('global fetch uses CONNECT proxy tunneling for provider model discovery and emits model_catalog_updated', testOptions, async () => {
+  const f = await fixture();
+  let catalogVersion = 1;
+  let sawConnectTunnel = false;
+  // Simulate a model gateway that only trusts requests routed through the CONNECT proxy.
+  const upstream = http.createServer((req, res) => {
+    if (req.url === '/v1/models' && req.headers['x-proxy-injected'] === 'verified') {
+      const models = Array.from({ length: catalogVersion }, (_, index) => ({ id: `tunneled-model-${index + 1}` }));
+      res.writeHead(200, { 'content-type': 'application/json', connection: 'close' });
+      res.end(JSON.stringify({ data: models }));
+      return;
+    }
+    res.writeHead(401, { 'content-type': 'application/json', connection: 'close' });
+    res.end(JSON.stringify({ error: { message: 'Missing proxy-injected header' } }));
+  });
+  await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+  const upstreamPort = (upstream.address() as net.AddressInfo).port;
+
+  // Accept only HTTP CONNECT tunnels (not non-tunneled HTTP proxy GET requests) and inject the verified header.
+  const proxy = http.createServer((_req, res) => {
+    res.writeHead(403);
+    res.end('Expected CONNECT tunnel');
+  });
+  proxy.on('connect', (_req, clientSocket, head) => {
+    sawConnectTunnel = true;
+    const targetSocket = net.connect(upstreamPort, '127.0.0.1', () => {
+      clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+      let injected = false;
+      const forward = (chunk: Buffer) => {
+        if (!injected) {
+          const text = chunk.toString('latin1');
+          const headerEnd = text.indexOf('\r\n');
+          if (headerEnd !== -1) {
+            injected = true;
+            targetSocket.write(Buffer.from(
+              `${text.slice(0, headerEnd)}\r\nx-proxy-injected: verified${text.slice(headerEnd)}`,
+              'latin1'
+            ));
+            return;
+          }
+        }
+        targetSocket.write(chunk);
+      };
+      if (head.length > 0) forward(head);
+      clientSocket.on('data', forward);
+      targetSocket.pipe(clientSocket);
+      clientSocket.on('end', () => targetSocket.end());
+      clientSocket.on('error', () => targetSocket.destroy());
+      targetSocket.on('error', () => clientSocket.destroy());
+    });
+  });
+  await new Promise<void>(resolve => proxy.listen(0, '127.0.0.1', resolve));
+  const proxyPort = (proxy.address() as net.AddressInfo).port;
+
+  try {
+    const proxyProvider = path.join(f.agent, 'proxy-provider.mjs');
+    await writeFile(proxyProvider, `
+      export default async function(pi) {
+        const fetchModels = async () => {
+          const res = await fetch(process.env.TEST_GATEWAY_URL + '/v1/models');
+          if (!res.ok) return [];
+          const json = await res.json();
+          return (json.data ?? []).map(m => ({
+            type: 'chat', id: m.id, name: m.id, api: 'openai-completions',
+            reasoning: false, input: ['text'], contextWindow: 32000, maxTokens: 4096,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+          }));
+        };
+        pi.registerProvider('tunneled', {
+          name: 'Tunneled Gateway', baseUrl: process.env.TEST_GATEWAY_URL + '/v1',
+          apiKey: 'sentinel', api: 'openai-completions',
+          models: await fetchModels(),
+          refreshModels: () => fetchModels()
+        });
+      }
+    `);
+    await writeFile(path.join(f.agent, 'settings.json'), JSON.stringify({
+      defaultProvider: 'tunneled', defaultModel: 'tunneled-model-1',
+      extensions: [extension, proxyProvider],
+      compaction: { enabled: false }, retry: { enabled: false }
+    }));
+
+    // Include NODE_USE_ENV_PROXY=1 just like the Docker Sandboxes image environment.
+    const s = f.launch({
+      NODE_USE_ENV_PROXY: '1',
+      HTTP_PROXY: `http://127.0.0.1:${proxyPort}`,
+      HTTPS_PROXY: `http://127.0.0.1:${proxyPort}`,
+      NO_PROXY: 'localhost',
+      TEST_GATEWAY_URL: 'http://tunneled.invalid:8080'
+    });
+    await s.request(s.client.sendRequest(Requests.initialize, f.params));
+    assert.equal(sawConnectTunnel, true, 'Provider discovery must use HTTP CONNECT through HTTP_PROXY');
+
+    catalogVersion = 2;
+    const initial = await s.request(s.client.sendRequest(Requests.getAvailableModels, null)) as {
+      models: Array<{ provider: string; id: string }>;
+    };
+    assert.ok(initial.models.some(m => m.provider === 'tunneled' && m.id === 'tunneled-model-1'));
+    await s.waitForEvent(({ event }) => event.type === 'model_catalog_updated');
+    const refreshed = await s.request(s.client.sendRequest(Requests.getAvailableModels, null)) as {
+      models: Array<{ provider: string; id: string }>;
+    };
+    assert.ok(refreshed.models.some(m => m.provider === 'tunneled' && m.id === 'tunneled-model-2'));
+    await s.shutdown();
+  } finally {
+    await Promise.all([
+      new Promise<void>(resolve => proxy.close(() => resolve())),
+      new Promise<void>(resolve => upstream.close(() => resolve()))
+    ]);
+    await f.close();
+  }
+});

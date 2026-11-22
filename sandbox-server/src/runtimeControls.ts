@@ -164,7 +164,8 @@ async function updateSetting(session: AgentSession, input: unknown): Promise<Set
 export function registerRuntimeControls(
   connection: MessageConnection,
   active: () => AgentSession,
-  diagnostic: (message: string) => void
+  diagnostic: (message: string) => void,
+  emitEvent?: (value: unknown) => void
 ): string[] {
   const capabilities: string[] = [];
   const refreshed = new WeakSet<AgentSession>();
@@ -220,7 +221,14 @@ export function registerRuntimeControls(
     const models = await selectableModels(session);
     if (!refreshed.has(session)) {
       refreshed.add(session);
-      void session.modelRuntime.refresh().catch(() => report('Pi model catalog refresh failed'));
+      void session.modelRuntime.refresh().then(
+        () => {
+          try {
+            if (active() === session) emitEvent?.({ type: 'model_catalog_updated' });
+          } catch { /* Session already closed or replaced. */ }
+        },
+        () => report('Pi model catalog refresh failed')
+      );
     }
     return { models: models.map(publicModel) };
   });
