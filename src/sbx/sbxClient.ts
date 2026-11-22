@@ -89,10 +89,11 @@ export class SbxClient implements AgentClient {
     const generation = ++this.generation;
     const controller = new AbortController();
     this.controller = controller;
+    let ready = false;
     const lifecycle = new SandboxLifecycle({ ...this.options.lifecycle,
       configureConnection: connection => {
         if (this.disposed || generation !== this.generation) throw new Error('Sandbox connection superseded');
-        this.installConnection(connection, generation);
+        this.installConnection(connection, generation, () => ready);
         this.options.lifecycle.configureConnection?.(connection);
       }
     });
@@ -105,6 +106,7 @@ export class SbxClient implements AgentClient {
         this.options.requestTimeoutMs ?? 120_000, controller.signal, 'Sandbox initial state'));
       if (this.disposed || generation !== this.generation) throw new Error('Sandbox connection superseded');
       this.sessionFile = state.sessionFile ?? this.sessionFile;
+      ready = true;
       return session;
     }).catch(async error => {
       if (generation === this.generation) {
@@ -120,7 +122,7 @@ export class SbxClient implements AgentClient {
   }
 
   /** Handlers exist before initialize, including extension UI during session_start. */
-  private installConnection(connection: MessageConnection, generation: number): void {
+  private installConnection(connection: MessageConnection, generation: number, isReady: () => boolean): void {
     this.detachUi(); this.sequence = -1;
     const active = () => !this.disposed && generation === this.generation;
     this.bridge = new SbxExtensionUiBridge(connection,
@@ -148,7 +150,7 @@ export class SbxClient implements AgentClient {
         catch { this.emitError('Invalid sandbox completion capabilities'); }
       }),
       connection.onDispose(() => {
-        if (!active()) return;
+        if (!active() || !isReady()) return;
         this.session = undefined;
         this.detachUi();
         // Fence late callbacks and require explicit reconnect; never replay a

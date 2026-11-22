@@ -48,6 +48,10 @@ else if (operation === 'inspect') {
     record({ type: 'initialize', params });
     await connection.sendNotification('fixture.initialize', params);
     if (state.handshake === 'hang') return new Promise(() => {});
+    if (state.handshake === 'missing-server') {
+      process.stderr.write("Error: Cannot find module '/home/agent/.tauren/server/dist/main.js'\n");
+      process.exit(1);
+    }
     if (state.handshake === 'reject') throw Error('wire closed');
     if (state.handshake === 'reverse') await connection.sendRequest('fixture.question', { workspace: params.workspace });
     if (Object.hasOwn(state, 'reply')) return state.reply;
@@ -73,7 +77,7 @@ interface FixtureState {
   probes?: number;
   nodeOutput?: string;
   hang?: string;
-  handshake?: 'hang' | 'reject' | 'reverse';
+  handshake?: 'hang' | 'missing-server' | 'reject' | 'reverse';
   reply?: unknown;
   replyOverrides?: Record<string, unknown>;
 }
@@ -140,7 +144,10 @@ suite('sbx lifecycle', function () {
       sbxExecutable: 'fixture-sbx', sshExecutable: process.execPath,
       sshArgs: [script, stateFile, 'transport', require.resolve('@tauren/shared/sbx/protocol'), recordsFile], runCommand: run,
       timeouts: { command: 2000, startup: 2000, handshake: 1000, shutdown: 100, probeInterval: 5 },
-      commandProvider: async () => { providerCalls++; return { version: 1, argv: ['sbx', 'create', 'fixture-kit'] }; },
+      commandProvider: async () => {
+        providerCalls++;
+        return { version: 1, command: ['sbx', 'create'], agent: 'fixture-kit', workspaces: [], options: {} };
+      },
       configureConnection: connection => { connections.push(connection); }
     };
   });
@@ -160,10 +167,11 @@ suite('sbx lifecycle', function () {
     const session = await new SandboxLifecycle(options).open(undefined, sessionFile);
     assert.equal(providerCalls, 1);
     assert.deepEqual(commands.map(command => command.executable === process.execPath ? command.args[options.sshArgs!.length] : command.args[0]),
-      ['--version', 'ls', '--no-input', 'ls', 'inspect', '-T']);
+      ['--version', 'ls', 'create', 'ls', 'inspect', '-T']);
     const create = commands[2];
     assert.equal(create.cwd, workspace);
-    assert.deepEqual(create.args.slice(0, 4), ['--no-input', 'create', '--name', name]);
+    assert.deepEqual(create.args.slice(0, 4), ['create', 'fixture-kit', workspace, sessionDirectory()]);
+    assert.ok(create.args.includes('--no-input'));
     assert.ok(create.args.includes(`PI_CODING_AGENT_SESSION_DIR=${sessionDirectory()}`));
     assert.ok(create.args.includes(path.join(root, 'resources/generated-sbx-kit')));
     assert.ok((await stat(sessionDirectory())).isDirectory());
@@ -177,10 +185,78 @@ suite('sbx lifecycle', function () {
     assertNoDestructiveCommands();
   });
 
+  test('uses provider-defined sandbox name, PI_CODING_AGENT_SESSION_DIR, and PI_CODING_AGENT_DIR during creation and adoption', async () => {
+    const providerState = path.join(root, 'pi-sbx', 'Provider_Sandbox.1');
+    const providerAgents = path.join(providerState, 'agents');
+    const providerSessions = path.join(providerState, 'sessions');
+    const providerMixin = path.join(root, 'pi-sbx-mixin');
+    await mkdir(providerMixin, { recursive: true });
+
+    delete options.sandboxName;
+    options.commandProvider = async () => {
+      providerCalls++;
+      return {
+        version: 1,
+        command: ['sbx', 'create'],
+        agent: 'fixture-kit',
+        workspaces: [workspace, providerAgents, providerSessions],
+        options: {
+          kit: [providerMixin],
+          name: 'Provider_Sandbox.1',
+          env: {
+            PI_CODING_AGENT_DIR: providerAgents,
+            PI_CODING_AGENT_SESSION_DIR: providerSessions
+          }
+        }
+      };
+    };
+
+    const first = await new SandboxLifecycle(options).open();
+    assert.equal(first.name, 'Provider_Sandbox.1');
+    assert.equal(first.paths.sandboxName, 'Provider_Sandbox.1');
+    assert.equal(first.paths.sessionDirectory, providerSessions);
+    assert.ok((await stat(providerAgents)).isDirectory());
+    assert.ok((await stat(providerSessions)).isDirectory());
+    await assert.rejects(stat(storageRoot), { code: 'ENOENT' });
+
+    const create = commands.find(command => command.args[0] === 'create')!;
+    assert.ok(create);
+    assert.ok(create.args.includes(`PI_CODING_AGENT_DIR=${providerAgents}`));
+    assert.ok(create.args.includes(`PI_CODING_AGENT_SESSION_DIR=${providerSessions}`));
+
+    const expectedLaunch = buildServerLaunchCommand({
+      nodePath: '/remote/node',
+      workspace,
+      sessionDirectory: providerSessions,
+      env: {
+        PI_CODING_AGENT_DIR: providerAgents,
+        PI_CODING_AGENT_SESSION_DIR: providerSessions
+      },
+      serverPath: '/home/agent/.tauren/server/dist/main.js'
+    });
+    assert.equal((await launches())[0].args!.at(-1), expectedLaunch);
+    assert.equal((await requests())[0].sessionDirectory, providerSessions);
+    await first.dispose();
+
+    // Adopting an existing sandbox must also ensure missing host session and agent directories exist.
+    await Promise.all([providerAgents, providerSessions].map(dir => rm(dir, { recursive: true })));
+    const adopted = await new SandboxLifecycle(options).open();
+    assert.equal(commands.filter(command => command.args[0] === 'create').length, 1);
+    assert.equal(adopted.name, 'Provider_Sandbox.1');
+    assert.equal(adopted.paths.sessionDirectory, providerSessions);
+    assert.ok((await stat(providerAgents)).isDirectory());
+    assert.ok((await stat(providerSessions)).isDirectory());
+    assert.equal((await launches())[1].args!.at(-1), expectedLaunch);
+    assert.equal((await requests())[1].sessionDirectory, providerSessions);
+    await adopted.dispose();
+    assertNoDestructiveCommands();
+  });
+
   for (const status of ['running', 'stopped']) {
-    test(`adopts a ${status} sandbox without provider or policy-changing start commands`, async () => {
+    test(`adopts a ${status} sandbox with the built-in provider without policy-changing start commands`, async () => {
       await existing(status);
-      options.workspaceTrusted = false; // Adoption does not execute a workspace provider.
+      delete options.commandProvider;
+      options.workspaceTrusted = false; // Built-in adoption does not execute a workspace provider.
       const session = await new SandboxLifecycle(options).open();
       assert.equal(providerCalls, 0);
       assert.equal((await state()).sandbox?.status, 'running');
@@ -193,7 +269,7 @@ suite('sbx lifecycle', function () {
 
   test('two lifecycle instances serialize creation from missing storage but own independent server pipes', async () => {
     const [one, two] = await Promise.all([new SandboxLifecycle(options).open(), new SandboxLifecycle(options).open()]);
-    assert.equal(providerCalls, 1);
+    assert.equal(providerCalls, 2);
     assert.equal(commands.filter(command => command.args.includes('create')).length, 1);
     const children = await launches();
     assert.equal(children.length, 2);
@@ -215,12 +291,18 @@ suite('sbx lifecycle', function () {
     const other = path.join(root, 'other'); await mkdir(other);
     await configure({ sandbox: { name, workspace: other, status: 'running', workspaces: [workspace] } });
     await assert.rejects(new SandboxLifecycle(options).open(), failure('incompatible', /another workspace/));
-    assert.equal(providerCalls, 0); assert.equal((await launches()).length, 0);
+    assert.equal((await launches()).length, 0);
     assert.equal(commands.some(command => command.executable === process.execPath), false);
   });
 
   test('rejects a clone provider before creation', async () => {
-    options.commandProvider = async () => ({ version: 1, argv: ['sbx', 'create', '--clone', 'fixture-kit'] });
+    options.commandProvider = async () => ({
+      version: 1,
+      command: ['sbx', 'create'],
+      agent: 'fixture-kit',
+      workspaces: [],
+      options: { clone: true }
+    });
     await assert.rejects(new SandboxLifecycle(options).open(), /Remove --clone/);
     assert.equal(commands.some(command => command.args.includes('create')), false);
     await assert.rejects(stat(sessionDirectory()), { code: 'ENOENT' });
@@ -234,7 +316,7 @@ suite('sbx lifecycle', function () {
     assert.equal(connections.length, 0);
   });
 
-  test('untrusted absent workspace cannot invoke provider or mutate storage', async () => {
+  test('untrusted workspace cannot invoke a configured provider or mutate storage', async () => {
     options.workspaceTrusted = false;
     await assert.rejects(new SandboxLifecycle(options).open(), failure('prerequisite', /Trust/));
     assert.equal(providerCalls, 0);
@@ -246,6 +328,7 @@ suite('sbx lifecycle', function () {
       await configure({ version });
       await assert.rejects(new SandboxLifecycle(options).open(), failure('prerequisite', /stable SBX/));
       assert.equal(commands.length, 1);
+      assert.equal(providerCalls, 0);
     });
   }
 
@@ -253,14 +336,16 @@ suite('sbx lifecycle', function () {
     test(`fails closed on list output ${listOutput}`, async () => {
       await configure({ listOutput });
       await assert.rejects(new SandboxLifecycle(options).open(), failure('incompatible', /schema/));
-      assert.equal(providerCalls, 0); assert.equal((await launches()).length, 0);
+      assert.equal(commands.some(command => command.args[0] === 'create'), false);
+      assert.equal((await launches()).length, 0);
     });
   }
 
   test('inspect command failure is not mistaken for absence or retried as create', async () => {
     await existing(); await configure({ inspectError: 'fixture inspection permission denied' });
     await assert.rejects(new SandboxLifecycle(options).open(), failure('command', /permission denied/));
-    assert.equal(providerCalls, 0); assert.equal((await launches()).length, 0);
+    assert.equal(commands.some(command => command.args[0] === 'create'), false);
+    assert.equal((await launches()).length, 0);
   });
 
   for (const output of ['banner\n{}', 'null', '[]', '{}', '{"name":"wrong","workspace":"/tmp"}',
@@ -346,6 +431,16 @@ suite('sbx lifecycle', function () {
     await assertChildrenStopped();
   });
 
+  test('explains how to recreate or rename an existing sandbox missing the Tauren server', async () => {
+    await existing(); await configure({ handshake: 'missing-server' });
+    await assert.rejects(
+      new SandboxLifecycle(options).open(),
+      failure('server', /Sandbox server handshake failed.*"fixture-project" does not contain the Tauren server.*sbx rm fixture-project/)
+    );
+    await assertChildrenStopped();
+    assertNoDestructiveCommands();
+  });
+
   test('reports launch failure with actionable SSH setup guidance', async () => {
     await existing();
     // Readiness still uses the real Node fixture; fail only the subsequent live spawn.
@@ -373,7 +468,9 @@ suite('sbx lifecycle', function () {
     // (rather than a child killed while starting) supplies the diagnostic.
     options.timeouts!.probeInterval = 1000;
     await assert.rejects(new SandboxLifecycle(options).open(), failure('ssh', /sbx login.*connection refused/));
-    assert.equal((await launches()).length, 0); assert.equal(providerCalls, 0);
+    assert.equal((await launches()).length, 0);
+    assert.equal(providerCalls, 1);
+    assert.equal(commands.some(command => command.args[0] === 'create'), false);
   });
 
   test('a hung readiness command is bounded by the startup budget', async () => {
@@ -416,7 +513,7 @@ suite('sbx lifecycle', function () {
     const entered = deferred(); const release = deferred();
     options.commandProvider = async () => {
       providerCalls++; entered.resolve(); await release.promise;
-      return { version: 1, argv: ['sbx', 'create', 'fixture-kit'] };
+      return { version: 1, command: ['sbx', 'create'], agent: 'fixture-kit', workspaces: [], options: {} };
     };
     const owner = new SandboxLifecycle(options).open();
     await entered.promise;

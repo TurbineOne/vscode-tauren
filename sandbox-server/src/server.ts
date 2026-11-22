@@ -42,17 +42,9 @@ function within(parent: string, child: string): boolean {
   return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
 }
 
-/** Resolve symlinks even when the final directory does not exist yet. */
-async function canonical(target: string): Promise<string> {
-  try { return await fs.realpath(target); }
-  catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    return path.join(await canonical(path.dirname(target)), path.basename(target));
-  }
-}
-
 /** RequestType checks callers at compile time, not JSON received over the pipe.
  * Validate initialize's untrusted payload and return canonical runtime paths.
+ * Host lifecycle owns creating mounted session and agent directories before launch.
  */
 async function validateInitializeParams(input: unknown): Promise<ServerConfiguration> {
   const params = object(input);
@@ -63,8 +55,13 @@ async function validateInitializeParams(input: unknown): Promise<ServerConfigura
   try {
     const workspace = await fs.realpath(absolute(params.workspace, 'workspace'));
     if (!(await fs.stat(workspace)).isDirectory()) throw new Error('workspace is not a directory');
-    const sessionDirectory = await canonical(absolute(params.sessionDirectory, 'sessionDirectory'));
+    const sessionDirectory = await fs.realpath(absolute(params.sessionDirectory, 'sessionDirectory'));
+    if (!(await fs.stat(sessionDirectory)).isDirectory()) throw new Error('sessionDirectory is not a directory');
     if (within(workspace, sessionDirectory)) throw new Error('sessionDirectory must be outside workspace');
+    if (process.env.PI_CODING_AGENT_DIR !== undefined) {
+      const agentDirectory = await fs.realpath(absolute(process.env.PI_CODING_AGENT_DIR, 'PI_CODING_AGENT_DIR'));
+      if (!(await fs.stat(agentDirectory)).isDirectory()) throw new Error('PI_CODING_AGENT_DIR is not a directory');
+    }
     let sessionFile: string | undefined;
     if (params.sessionFile !== undefined) {
       sessionFile = await fs.realpath(absolute(params.sessionFile, 'sessionFile'));
@@ -76,7 +73,6 @@ async function validateInitializeParams(input: unknown): Promise<ServerConfigura
         throw new Error('sessionFile workspace does not match initialize workspace');
       }
     }
-    await fs.mkdir(sessionDirectory, { recursive: true });
     return { workspace, sessionDirectory, ...(sessionFile ? { sessionFile } : {}) };
   } catch (error) {
     if (error instanceof ResponseError) throw error;

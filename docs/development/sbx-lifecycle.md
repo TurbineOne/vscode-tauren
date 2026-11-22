@@ -10,44 +10,48 @@ for configuration, session discovery, and reconnection.
 
 ## Ownership and sequence
 
-1. `SandboxLifecycle.open()` (`src/sbx/lifecycle.ts`) calls
-   `resolveSandboxPaths()` (`src/sbx/configuration.ts`) to resolve canonical
-   workspace/name/store paths.
+1. `SandboxLifecycle.open()` (`src/sbx/lifecycle.ts`) canonicalizes the open
+   workspace and fallback storage root with helpers in `src/sbx/configuration.ts`.
 2. `SandboxLifecycle.open()` uses the module-private `exclusive()` queue in
-   `lifecycle.ts` to serialize lookup and creation across lifecycle instances for
-   that sandbox name.
-   This guards overlapping asynchronous opens in one extension-host process—for
-   example, two Tauren sessions connecting before either has finished provisioning.
-   They need not be separate OS processes: both could observe absence before
-   either creates the sandbox. The process-local queue prevents that race, but
-   does not coordinate separate VS Code windows/processes or terminal commands.
-3. `SbxControl.checkPrerequisites()` (`src/sbx/sbxControl.ts`) checks
-   `sbx --version`. `SbxControl.lookup()` lists with `sbx ls --json` and inspects
-   a matching name with `sbx inspect NAME --json`, using `parseSandboxInspection()`
-   or the supplied decoder. An inspect failure is not treated as absence.
-4. `SandboxLifecycle.open()` calls `SbxControl.assertWorkspace()` to adopt an
-   existing sandbox only if its primary workspace matches; a sandbox associated
-   with another workspace is rejected. For an absent sandbox only:
-   1. `SandboxLifecycle.open()` checks `workspaceTrusted` before running a
-      configured host provider or creating sandbox resources.
-   2. It invokes the supplied `commandProvider` callback, `runCommandProvider()`
-      for a configured executable, or `defaultCommandProvider()` for the built-in
-      provider (`src/sbx/commandProvider.ts`). The provider describes creation;
-      it does not create or attach to the sandbox.
-   3. `composeSandboxCommand()` (`src/sbx/commandComposition.ts`) validates the
-      response and composes Tauren's workspace, session store, server mixin, name
-      and environment arguments.
-   4. `SandboxLifecycle.open()` calls Node's `mkdir()` for only the effective host
-      session directory, not the entire storage root's contents or other
-      sandboxes' session directories, then rechecks with `resolveSandboxPaths()`.
-   5. The supplied `runCommand`, defaulting to `runHostCommand()`
-      (`src/sbx/process.ts`), executes the creation command directly as
-      executable/argv, without a local shell.
-   6. `SbxControl.lookup()` and `SbxControl.assertWorkspace()` inspect and validate
-      the result again. Creation success is not proof of workspace association
-      or server readiness.
-   The provider is never rerun merely to reconnect to an existing sandbox.
-5. `SandboxLifecycle.waitForSsh()` establishes SSH readiness and locates Node
+   `lifecycle.ts` to serialize provider resolution, lookup, and creation across
+   lifecycle instances in the same extension-host process.
+   This prevents two concurrent Tauren sessions from racing sandbox creation or
+   staging side effects before either finishes provisioning, though it does not
+   coordinate separate OS processes or terminal commands.
+3. Inside that queue, `SandboxLifecycle.open()` verifies `workspaceTrusted`
+   whenever an external command provider is configured, checks `sbx --version`
+   through `SbxControl.checkPrerequisites()` (`src/sbx/sbxControl.ts`), and
+   evaluates the command provider (`commandProvider`, `runCommandProvider()`, or
+   `defaultCommandProvider()` in `src/sbx/commandProvider.ts`).
+   `composeSandboxCommand()` (`src/sbx/commandComposition.ts`) then resolves the
+   effective sandbox name, session directory, environment assignments (such as
+   `PI_CODING_AGENT_DIR` and `PI_CODING_AGENT_SESSION_DIR`), workspace mounts,
+   and Tauren server mixin, so both new and adopted sandboxes use the exact
+   paths defined by the provider.
+4. `SbxControl.lookup()` lists sandboxes with `sbx ls --json` and inspects a
+   matching name with `sbx inspect NAME --json`, using `parseSandboxInspection()`
+   or the supplied decoder. An inspect failure is reported as an error rather
+   than treated as absence.
+5. `SandboxLifecycle.open()` calls `SbxControl.assertWorkspace()` to adopt an
+   existing sandbox only when its primary workspace matches, rejecting any
+   sandbox associated with another workspace. In a trusted workspace, it also
+   ensures the resolved host session directory and any configured
+   `PI_CODING_AGENT_DIR` exist before connecting, because the in-sandbox server
+   cannot create directories under root-owned host mount parents. When no
+   sandbox exists yet:
+   1. `SandboxLifecycle.open()` checks `workspaceTrusted` before mutating host
+      storage or creating sandbox resources.
+   2. It calls Node's `mkdir()` for the resolved host session directory and any
+      configured `PI_CODING_AGENT_DIR`, then re-verifies the canonical
+      workspace, session, and agent paths so symlink changes during creation
+      fail closed.
+   3. The supplied `runCommand`, defaulting to `runHostCommand()`
+      (`src/sbx/process.ts`), executes the composed `sbx create` command
+      directly as an executable and argument vector without a local shell.
+   4. `SbxControl.lookup()` and `SbxControl.assertWorkspace()` inspect and
+      validate the created sandbox again, because command exit status alone does
+      not prove workspace association or server readiness.
+6. `SandboxLifecycle.waitForSsh()` establishes SSH readiness and locates Node
    with `command -v node`, retrying within the startup budget. It uses
    `buildSshArguments()` (`src/sbx/sshTransport.ts`) and the same command runner. A successful creation command does not prove SSH is ready;
    this short-lived probe proves an authenticated remote command can execute and
@@ -56,13 +60,15 @@ for configuration, session discovery, and reconnection.
    starts stopped sandboxes automatically. Do not use `sbx run -d` for adoption:
    that changes their auto-stop policy permanently. Node must resolve to a single
    absolute path.
-6. `SandboxLifecycle.open()` calls `SbxSshTransport.open()`
+7. `SandboxLifecycle.open()` calls `SbxSshTransport.open()`
    (`src/sbx/sshTransport.ts`) directly to
    spawn `ssh -T … NAME.sbx REMOTE_COMMAND` and launch this client's server.
    `SbxSshTransport` uses `buildServerLaunchCommand()`
-   (`shared/src/ssh/serverLaunch.ts`) and `createProtocolConnection()`
-   (`shared/src/sbx/connection.ts`). `SandboxLifecycle.open()` invokes the caller's
-   `configureConnection` hook to register reverse request/event handlers before
+   (`shared/src/ssh/serverLaunch.ts`), passing the resolved workspace, session
+   directory, and provider environment assignments such as `PI_CODING_AGENT_DIR`,
+   and opens `createProtocolConnection()` (`shared/src/sbx/connection.ts`).
+   `SandboxLifecycle.open()` invokes the caller's `configureConnection` hook to
+   register reverse request/event handlers before
    sending `Requests.initialize`, since SDK startup can itself emit extension UI
    requests. It bounds the request with `bounded()` and calls
    `validateSandboxHandshake()` (`src/sbx/handshake.ts`) to validate:

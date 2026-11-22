@@ -2497,6 +2497,55 @@ suite('TaurenChatController', () => {
     harness.controller.dispose();
   });
 
+  test('passive metadata, slash-command, and completion refreshes stay quiet while a disconnected client awaits reload', async () => {
+    let disconnected = false;
+    const baseClient = new FakePiClient();
+    const rejectDisconnected = async () => {
+      if (disconnected) {
+        throw new Error('Sandbox disconnected; reconnect explicitly to restore persisted history');
+      }
+      return {};
+    };
+    const client = Object.assign(baseClient, {
+      isDisconnected: () => disconnected,
+      reconnect: async () => {
+        disconnected = false;
+      },
+      getState: async () => {
+        await rejectDisconnected();
+        return baseClient.state;
+      },
+      getCommands: async () => {
+        await rejectDisconnected();
+        return { commands: [] };
+      },
+      getComposerCompletionCapabilities: async () => {
+        await rejectDisconnected();
+        return { triggerCharacters: ['@'], generation: 1 };
+      },
+      getComposerCompletions: async () => {
+        await rejectDisconnected();
+        return { id: 'c1', revision: 1, replaceStart: 0, replaceEnd: 1, items: [] };
+      }
+    });
+    const harness = createControllerHarness([client]);
+    await harness.controller.handleWebviewMessage({ type: 'ready' });
+    await flushPromises();
+    disconnected = true;
+    client.emitError('Sandbox disconnected. Reconnect to restore persisted history; interrupted work was not replayed.');
+    const countBefore = lastState(harness).messages.length;
+
+    await harness.controller.handleWebviewMessage({ type: 'refreshMetadata' });
+    await harness.controller.handleWebviewMessage({ type: 'refreshSlashCommands' });
+    assert.deepStrictEqual(await harness.controller.getComposerCompletionCapabilities(), { triggerCharacters: [], generation: 0 });
+    assert.strictEqual(
+      await harness.controller.getComposerCompletions({ id: 'c1', revision: 1, text: '/', selectionStart: 1, selectionEnd: 1 }, new AbortController().signal),
+      undefined
+    );
+    assert.strictEqual(lastState(harness).messages.length, countBefore);
+    harness.controller.dispose();
+  });
+
   test('reload slash command reloads Pi resources and refreshes command metadata', async () => {
     const client = new FakePiClient({
       state: {

@@ -263,7 +263,7 @@ export const settingDefinitions = [
     owner: 'tauren',
     section: 'runtime',
     label: 'Docker Sandboxes storage root',
-    description: 'Host directory for sessions when Backend is Docker Sandboxes.',
+    description: 'Default host directory for sessions when the command provider does not define PI_CODING_AGENT_SESSION_DIR.',
     control: 'text',
     defaultValue: '~/.tauren',
     helper: 'Use an absolute POSIX path or a path starting with ~/.',
@@ -274,10 +274,10 @@ export const settingDefinitions = [
     owner: 'tauren',
     section: 'runtime',
     label: 'Docker sandbox name',
-    description: 'Optional sandbox name when Backend is Docker Sandboxes.',
+    description: 'Optional sandbox name override when Backend is Docker Sandboxes.',
     control: 'text',
     defaultValue: '',
-    helper: 'Leave empty to derive the name from the workspace folder.',
+    helper: 'Leave empty to use options.name from the command provider or derive the name from the workspace folder.',
     liveBehavior: 'reload'
   },
   {

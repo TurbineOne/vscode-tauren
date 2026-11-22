@@ -10,7 +10,10 @@ const environment = { PATH: process.env.PATH, HOME: directory, USERPROFILE: dire
   TMPDIR: directory, NO_COLOR: '1', PI_CODING_AGENT_DIR: path.join(directory, 'agent') };
 for (const key of Object.keys(process.env)) delete process.env[key];
 Object.assign(process.env, environment);
-if (mode === 'real') {
+if (mode === 'missing-server') {
+  console.error("Error: Cannot find module '/home/agent/.tauren/server/dist/main.js'");
+  process.exit(1);
+} else if (mode === 'real') {
   import(pathToFileURL(main).href).catch(error => { console.error(error); process.exitCode = 1; });
 } else {
   // Fault injection is confined to the subprocess boundary; normal tests use the

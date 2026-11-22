@@ -1,101 +1,136 @@
 # Sandbox command providers
 
-`src/sbx/` contains VS Code-independent configuration/provider/composition helpers.
-These do not create sandboxes or connect an AgentClient. Lifecycle and settings UI
-integration are separate work; existing SDK/Kward behavior is unchanged.
+Tauren uses a structured JSON specification to configure and create Docker
+Sandboxes without parsing shell commands or scraping a flat CLI array. The
+helpers in `src/sbx/` execute a configured command provider, validate its
+Version 1 JSON output (matching the `pi-sbx command` specification), apply
+Tauren's server mixin and any user overrides, and construct the final
+`sbx create` argument vector.
 
-## Identity and paths
+## Command provider execution
 
-`resolveSandboxPaths()` canonicalizes an existing POSIX workspace and storage root
-(default `~/.tauren`), deriving `<root>/<name>/sessions` without creating it. Only
-current-user `~`/`~/` expansion is supported. Existing symlinks, including session
-path components, are resolved before containment checks. The effective store may
-not equal or descend from the workspace. Colons are rejected because SBX workspace
-operands use them as delimiters; Windows host paths are currently unsupported.
-
-The default name is the canonical workspace basename, lowercased, non-ASCII/
-non-alphanumeric runs replaced with `-`, edge hyphens trimmed, and length limited
-to 63. Different parent paths with equal basenames intentionally collide. An
-explicit override must already match `[a-z0-9][a-z0-9-]*` within 63 characters.
-
-## Provider execution
-
-A configured command is data, not a shell string:
+A command provider is configured as an executable and an argument array rather
+than a shell command string, so Tauren never passes workspace settings through a
+shell:
 
 ```json
-{ "executable": "/absolute/path/to/provider", "args": ["--profile", "development"] }
+{ "executable": "pi-sbx", "args": ["command"] }
 ```
 
-`runCommandProvider()` checks `workspaceTrusted` before spawning, uses the workspace
-as cwd, closes stdin, and uses `shell: false`. The future VS Code caller must supply
-the actual workspace trust decision. Default bounds are 30 seconds and 1 MiB of
-combined stdout/stderr. Cancellation, timeout and output overflow stop the provider.
-Failures do not echo arbitrary output; successful stderr is returned separately
-for deliberate diagnostic handling. A provider is trusted host code, not a security
-sandbox, and must not create/attach a sandbox or print credentials.
+`runCommandProvider()` verifies that the workspace is trusted before spawning a
+provider, because running a workspace-configured command executes host code. It
+runs the executable with the canonical workspace as its working directory,
+closes standard input, and caps combined output at 1 MiB and execution time at
+30 seconds by default. Concurrent provider calls for the same workspace are
+serialized so that idempotent staging steps, such as initializing a sandbox
+state directory on first use, do not race when session discovery and client
+startup run at the same time. If a provider fails, Tauren reports the exit
+status without echoing output that might contain sensitive host details, while
+stderr from a successful run is returned separately for diagnostics.
 
-Stdout must be exactly one JSON object:
+## Version 1 JSON specification
+
+A provider must write exactly one JSON object to stdout with `version` set to
+`1`, matching the `pi-sbx command` contract:
 
 ```json
-{ "version": 1, "argv": ["sbx", "create", "/absolute/path/to/pi-sandbox-kit"] }
+{
+  "version": 1,
+  "command": ["sbx", "create"],
+  "agent": "/home/alice/.pi-sbx/cache/base-kits/76e9e67a28516823282169237f390ccc2a54f76b466b719da55567f3fa08f897",
+  "workspaces": [
+    "/home/alice/src/my-project",
+    "/home/alice/.pi-sbx/sandboxes/my-project/agents",
+    "/home/alice/.pi-sbx/sandboxes/my-project/sessions",
+    "/home/alice/skills/custom-skill:ro"
+  ],
+  "options": {
+    "kit": [
+      "/home/alice/.pi-sbx/kit"
+    ],
+    "name": "my-project",
+    "env": {
+      "PI_CODING_AGENT_DIR": "/home/alice/.pi-sbx/sandboxes/my-project/agents",
+      "PI_CODING_AGENT_SESSION_DIR": "/home/alice/.pi-sbx/sandboxes/my-project/sessions"
+    }
+  }
+}
 ```
 
-`defaultCommandProvider()` supplies Tauren's generated standalone sandbox path;
-`packagedSandboxKits()` resolves both installed kit paths. Third-party providers
-supply their own compatible main Pi kit, extra mixins and optional workspaces.
-They must omit Tauren's primary workspace, session store/mount/environment and
-server mixin. A matching name is accepted once; conflicting/repeated names fail.
+Each top-level field has a single role in the `sbx create` invocation:
 
-## Supported argv grammar
+- `version`: Must be the integer `1`. Other versions are rejected so that future
+  schema changes fail explicitly instead of being misinterpreted.
+- `command`: Must describe `sbx create`, using either `"sbx"` or an absolute
+  POSIX path whose basename is `sbx`.
+- `agent`: Names the base sandbox kit passed as the first positional operand to
+  `sbx create`. When `agent` is `"@tauren/bundled-pi-kit"`, Tauren replaces it
+  with the installed standalone Pi sandbox kit directory.
+- `workspaces`: Lists positional mount operands in order. When nonempty,
+  `workspaces[0]` must be the writable primary workspace matching the open
+  Tauren workspace, followed by additional mounts `SOURCE[:TARGET][:ro]`. When
+  `workspaces` is empty, as in Tauren's static default provider, Tauren supplies
+  the primary workspace and resolved session directory.
+- `options`: Maps `sbx create` long option names (without leading `--`) to
+  boolean, string, finite number, string-array, or string-map values.
 
-The documented CLI shape is `sbx create MAIN_KIT [WORKSPACES...]` or
-`sbx run -d MAIN_KIT [WORKSPACES...]`. This targets the SBX 0.51-era create/run
-interface; exact binary-version acceptance belongs to lifecycle prerequisite
-checks. Unit tests verify our strict subset, not every CLI version's options.
+## How provider values override Tauren defaults
 
-Accepted executable: `sbx` or an absolute executable path whose basename is `sbx`.
-`--no-input` may appear once before the subcommand or among its options. Supported
-separate-token options:
+Values returned by the command provider take precedence over the defaults that
+Tauren would otherwise generate, so external harnesses such as `pi-sbx` control
+their own sandbox identity, agent configuration, and session store. Both client
+provisioning (`SandboxLifecycle`) and host session discovery
+(`resolveSbxWorkspace`) evaluate the same provider specification so that chat
+connections, the Session List Lane, Trace Origin, and session deletion all agree
+on the active paths:
 
-| Options | Values | Repeatable |
-|---|---|---|
-| `--name` | resolved name | No |
-| `--kit` | mixin reference | Yes, distinct |
-| `--env`, `-e` | explicit `KEY=VALUE` | Yes, distinct keys |
-| `--publish`, `-p` | SBX port specification | Yes |
-| `--cpus` | nonnegative integer | No |
-| `--memory`, `-m` | integer, optional k/m/g/t suffix | No |
-| `--detach`, `-d` | none; run only and required | No |
+- **Sandbox name (`options.name`)**: Used as the sandbox identity unless the
+  user sets a nonempty `tauren.sbx.sandboxName` override in VS Code. When
+  neither is set, Tauren derives a lowercase hyphenated name from the workspace
+  basename. Explicit and provider-supplied names must match
+  `[a-zA-Z0-9][a-zA-Z0-9_.-]*` within 63 characters and must not end with
+  `.sbx`.
+- **Session directory (`options.env.PI_CODING_AGENT_SESSION_DIR`)**: Used as the
+  host and sandbox session store instead of `<storageRoot>/<name>/sessions`. The
+  resolved directory must be an absolute POSIX path outside the workspace. If
+  `workspaces` already mounts that directory writable at the same path, Tauren
+  keeps the mount in place; otherwise, Tauren inserts the session mount
+  immediately after the primary workspace.
+- **Agent directory and environment (`options.env`)**: Non-credential
+  environment entries such as `PI_CODING_AGENT_DIR` are preserved in
+  `sbx create` and are also passed explicitly when launching the per-connection
+  server over SSH, because SSH commands do not automatically inherit container
+  creation environment variables. Environment variable names that look like
+  credentials are rejected because credential injection belongs to Docker
+  Sandboxes.
+- **Mixin kits (`options.kit`)**: Provider mixins are preserved in order, and
+  Tauren appends its packaged server mixin (`resources/generated-sbx-kit`) so
+  that every sandbox receives the Tauren RPC server.
 
-Aliases count as the same option for duplicate checks. Unknown flags, short flag
-clusters, `--flag=value`, bare `--`, agent arguments, env-file/mount/volume options,
-and inherited bare environment keys are intentionally unsupported. Sensitive
-credential-like environment keys are rejected; credential injection belongs to
-SBX. This is not an exhaustive secret detector: trusted providers must honor the
-no-credentials contract.
+Tauren also enforces `--no-input` on `sbx create` because creation runs without
+an interactive terminal, and it rejects `clone: true` because editor links and
+session diffs require a direct workspace mount.
 
-The first positional is the main sandbox kit; later positionals are additional
-absolute workspace operands `PATH[:TARGET][:ro]`. Sources are canonicalized and
-checked for controlled-path conflicts, duplicate sources/targets, and overlapping
-targets. Options may follow positionals but option/value pairs are retained.
-Relative mount paths are not accepted. Shell metacharacters/spaces remain literal
-argv data; no placeholders are expanded.
+## Constructing the argument vector
 
-`composeSandboxCommand()` returns `{ executable, args }`, always adding
-`--no-input`, the resolved name if omitted, the independent Tauren server mixin,
-explicit session environment, and primary workspace/store operands ahead of other
-provider workspaces. The lifecycle caller must execute this argv directly with
-no shell and invoke the provider only for new sandbox creation.
+`buildSbxCreateArgv()` converts the composed Version 1 specification into a
+literal argument array for `spawn` or `execFile`:
+
+1. Start with `spec.command`, `spec.agent`, and all entries of
+   `spec.workspaces`.
+2. Visit each entry of `spec.options` and prepend `--` to its key:
+   - `true` appends `["--<key>"]`, while `false`, `null`, and `undefined` are
+     omitted.
+   - A `string` or `number` appends `["--<key>", String(value)]`.
+   - A `string[]` repeats `["--<key>", item]` for each element in order.
+   - A `Record<string, string>` repeats `["--<key>", "<subKey>=<subValue>"]` for
+     each entry.
 
 ## Tests
 
-The three `src/test/suite/sbx*.test.ts` suites are included in root `npm test`.
-After compilation they can run without VS Code or SBX:
+The command-provider, composition, configuration, and lifecycle unit suites run
+without Docker Sandboxes or a model provider after compilation:
 
 ```sh
 npx mocha --ui tdd --timeout 15000 'out/test/suite/sbx*.test.js'
 ```
-
-They exercise canonical paths, collisions and symlinks; exact create/run argv;
-provider malformed responses/failures/bounds; workspace trust; and literal
-metacharacter arguments with real temporary provider subprocesses.
