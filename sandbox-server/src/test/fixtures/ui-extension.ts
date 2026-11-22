@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
-import { createReadTool } from '@earendil-works/pi-coding-agent';
+import { createReadTool, getSettingsListTheme } from '@earendil-works/pi-coding-agent';
 import { Image } from '@earendil-works/pi-tui';
 import { appendFile, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -197,6 +197,13 @@ export default function uiExtension(pi: ExtensionAPI): void {
   } });
   pi.registerCommand('ui-switch-session', { handler: async (args, ctx) => {
     await ctx.switchSession(args, { withSession: async fresh => { fresh.ui.notify('switch-session:fresh-context'); } });
+  } });
+  pi.registerCommand('ui-theme', { handler: async (_args, ctx) => {
+    const status = ctx.ui.theme.fg('warning', 'fixture-status');
+    const styled = ctx.ui.theme.style('label', { fg: 'accent', bold: true });
+    const settingsCursor = getSettingsListTheme().cursor;
+    ctx.ui.setStatus('theme-status', status);
+    ctx.ui.notify(`theme:${ctx.ui.theme.appearance}:${Boolean(styled)}:${Boolean(settingsCursor)}`);
   } });
   pi.registerCommand('ui-message', { handler: async () => {
     pi.sendMessage({ customType: 'ui-fixture', content: 'fixture payload', display: true });

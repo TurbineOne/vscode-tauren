@@ -584,6 +584,10 @@ test('custom message and registered read-tool renderers enrich real SDK wire eve
       });
     }
     assert.equal(reads.filter(entry => entry.event.type === 'tool_execution_end').length, 2);
+    await s.prompt('/ui-theme');
+    await s.notification('ui.status', value => value.key === 'theme-status'
+      && value.text === '\x1b[33mfixture-status\x1b[39m');
+    await s.notification('ui.notify', value => value.message === 'theme:dark:true:true');
     await s.shutdown();
   } finally { await s.close(); }
 });

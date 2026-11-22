@@ -17,6 +17,7 @@ import type {
 
 type ProviderWithDeleteSession = {
   deleteSession(sessionPath: string, displayName: string): Promise<boolean>;
+  deleteWorkspaceFile(uri: vscode.Uri, options?: { recursive?: boolean; useTrash?: boolean }): Thenable<void>;
 };
 
 suite('TaurenChatViewProvider', () => {
@@ -35,27 +36,35 @@ suite('TaurenChatViewProvider', () => {
     provider.dispose();
   });
 
-  test('coalesces watcher diff refresh scheduling when a session file is active', () => {
-    const provider = new TaurenChatViewProvider(
-      vscode.Uri.file('/extension'),
-      () => new FakePiClient({ state: {} }),
-      new FakeMemento({ 'tauren.currentSessionFile': '/sessions/current.jsonl' }),
-      undefined,
-      () => '/workspace'
-    );
-    const providerWithRefresh = provider as unknown as {
-      scheduleSessionDiffStatsRefresh(): void;
-      sessionDiffStatsRefreshTimer?: NodeJS.Timeout;
-    };
+  test('coalesces watcher diff refresh scheduling when a session file is active', async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'tauren-session-'));
+    const sessionFile = path.join(tempDir, 'current.jsonl');
 
-    providerWithRefresh.scheduleSessionDiffStatsRefresh();
-    const firstTimer = providerWithRefresh.sessionDiffStatsRefreshTimer;
-    providerWithRefresh.scheduleSessionDiffStatsRefresh();
+    try {
+      await fs.writeFile(sessionFile, JSON.stringify({ type: 'session', cwd: '/workspace' }) + '\n', 'utf8');
+      const provider = new TaurenChatViewProvider(
+        vscode.Uri.file('/extension'),
+        () => new FakePiClient({ state: {} }),
+        new FakeMemento({ 'tauren.currentSessionFile': sessionFile }),
+        undefined,
+        () => '/workspace'
+      );
+      const providerWithRefresh = provider as unknown as {
+        scheduleSessionDiffStatsRefresh(): void;
+        sessionDiffStatsRefreshTimer?: NodeJS.Timeout;
+      };
 
-    assert.ok(firstTimer);
-    assert.ok(providerWithRefresh.sessionDiffStatsRefreshTimer);
-    assert.notStrictEqual(providerWithRefresh.sessionDiffStatsRefreshTimer, firstTimer);
-    provider.dispose();
+      providerWithRefresh.scheduleSessionDiffStatsRefresh();
+      const firstTimer = providerWithRefresh.sessionDiffStatsRefreshTimer;
+      providerWithRefresh.scheduleSessionDiffStatsRefresh();
+
+      assert.ok(firstTimer);
+      assert.ok(providerWithRefresh.sessionDiffStatsRefreshTimer);
+      assert.notStrictEqual(providerWithRefresh.sessionDiffStatsRefreshTimer, firstTimer);
+      provider.dispose();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   test('posts cached legacy model metadata and persists refreshed session metadata', async () => {
@@ -187,17 +196,63 @@ suite('TaurenChatViewProvider', () => {
   });
 
   test('restores and persists current session file through workspace state', async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'tauren-session-'));
+    const sessionFile = path.join(tempDir, 'current.jsonl');
+
+    try {
+      await fs.writeFile(sessionFile, JSON.stringify({ type: 'session', cwd: '/workspace' }) + '\n', 'utf8');
+      const workspaceState = new FakeMemento({
+        'tauren.currentSessionFile': sessionFile
+      });
+      const clientOptions: unknown[] = [];
+      const client = new FakePiClient({
+        state: {
+          model: { provider: 'openai', id: 'live-model', reasoning: false },
+          thinkingLevel: 'off',
+          sessionFile: '/sessions/updated.jsonl'
+        },
+        messages: [{ role: 'user', content: 'Restored prompt' }]
+      });
+      const provider = new TaurenChatViewProvider(
+        vscode.Uri.file('/extension'),
+        (options) => {
+          clientOptions.push(options);
+          return client;
+        },
+        workspaceState,
+        undefined,
+        () => '/workspace'
+      );
+      const view = new FakeWebviewView();
+
+      provider.resolveWebviewView(view.asWebviewView());
+      await flushPromises();
+
+      assert.deepStrictEqual(clientOptions.map(withoutExtensionUi), [
+        { cwd: '/workspace', sessionFile }
+      ]);
+      assert.deepStrictEqual(lastPostedState(view).messages, [
+        { role: 'user', text: 'Restored prompt' }
+      ]);
+      assert.strictEqual(workspaceState.get<unknown>('tauren.currentSessionFile'), '/sessions/updated.jsonl');
+      provider.dispose();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test('ignores missing persisted session file and starts fresh', async () => {
     const workspaceState = new FakeMemento({
-      'tauren.currentSessionFile': '/sessions/current.jsonl'
+      'tauren.currentSessionFile': path.join(os.tmpdir(), 'tauren-missing-session', 'missing.jsonl')
     });
     const clientOptions: unknown[] = [];
     const client = new FakePiClient({
       state: {
         model: { provider: 'openai', id: 'live-model', reasoning: false },
         thinkingLevel: 'off',
-        sessionFile: '/sessions/updated.jsonl'
+        sessionFile: '/sessions/new.jsonl'
       },
-      messages: [{ role: 'user', content: 'Restored prompt' }]
+      messages: []
     });
     const provider = new TaurenChatViewProvider(
       vscode.Uri.file('/extension'),
@@ -215,12 +270,9 @@ suite('TaurenChatViewProvider', () => {
     await flushPromises();
 
     assert.deepStrictEqual(clientOptions.map(withoutExtensionUi), [
-      { cwd: '/workspace', sessionFile: '/sessions/current.jsonl' }
+      { cwd: '/workspace' }
     ]);
-    assert.deepStrictEqual(lastPostedState(view).messages, [
-      { role: 'user', text: 'Restored prompt' }
-    ]);
-    assert.strictEqual(workspaceState.get<unknown>('tauren.currentSessionFile'), '/sessions/updated.jsonl');
+    assert.strictEqual(workspaceState.get<unknown>('tauren.currentSessionFile'), '/sessions/new.jsonl');
     provider.dispose();
   });
 
@@ -541,30 +593,29 @@ suite('TaurenChatViewProvider', () => {
 
   test('deletes sessions without confirmation when configured', async () => {
     const sessionFile = path.join(os.tmpdir(), 'tauren-delete-session', 'session.jsonl');
-    const originalDelete = vscode.workspace.fs.delete;
     const deleteCalls: { uri: vscode.Uri; options: { recursive?: boolean; useTrash?: boolean } | undefined }[] = [];
     const configuration = vscode.workspace.getConfiguration('tauren');
     const previousValue = configuration.inspect<boolean>('confirmSessionDeletion')?.globalValue;
     const provider = new TaurenChatViewProvider(vscode.Uri.file('/extension'), () => {
       throw new Error('Unexpected Pi client creation');
     });
+    const providerWithDelete = provider as unknown as ProviderWithDeleteSession;
 
     try {
-      // Test confirmation policy and the Trash request, not the host desktop's
-      // Trash implementation (which may be unavailable in headless environments).
-      vscode.workspace.fs.delete = async (uri, options) => {
+      // This test stubs deleteWorkspaceFile on the provider instance because VS Code freezes
+      // vscode.workspace.fs and headless environments may not have a desktop Trash service.
+      providerWithDelete.deleteWorkspaceFile = async (uri, options) => {
         deleteCalls.push({ uri, options });
       };
       await configuration.update('confirmSessionDeletion', false, vscode.ConfigurationTarget.Global);
 
-      const deleted = await (provider as unknown as ProviderWithDeleteSession).deleteSession(sessionFile, 'Session');
+      const deleted = await providerWithDelete.deleteSession(sessionFile, 'Session');
 
       assert.strictEqual(deleted, true);
       assert.strictEqual(deleteCalls.length, 1);
       assert.strictEqual(deleteCalls[0].uri.fsPath, sessionFile);
       assert.deepStrictEqual(deleteCalls[0].options, { useTrash: true });
     } finally {
-      vscode.workspace.fs.delete = originalDelete;
       provider.dispose();
       await configuration.update('confirmSessionDeletion', previousValue, vscode.ConfigurationTarget.Global);
     }

@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import {
   createAgentSessionRuntime, createAgentSessionServices, createAgentSessionFromServices,
-  getAgentDir, getPackageDir, SessionManager, SettingsManager, VERSION, type AgentSessionRuntime
+  getAgentDir, getPackageDir, initTheme, SessionManager, SettingsManager, VERSION, type AgentSessionRuntime
 } from '@earendil-works/pi-coding-agent';
 import { ErrorCodes, ResponseError, type MessageConnection } from '@tauren/shared/sbx/protocol';
 import { registerRuntimeControls } from './runtimeControls.js';
@@ -230,6 +230,7 @@ export function registerServer(connection: MessageConnection, serverVersion: str
       process.env.HTTPS_PROXY ??= configuredProxy;
     }
     configureSandboxHttpDispatcher(getPackageDir());
+    initTheme('dark', false);
     const manager = config.sessionFile
       ? SessionManager.open(config.sessionFile, config.sessionDirectory, config.workspace)
       : SessionManager.create(config.workspace, config.sessionDirectory);

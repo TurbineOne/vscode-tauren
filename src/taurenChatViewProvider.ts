@@ -1452,8 +1452,12 @@ export class TaurenChatViewProvider implements vscode.WebviewViewProvider, vscod
       for await (const _record of discovery.readRecords(sessionPath)) { associated = true; break; }
       if (!associated) throw new Error('Only sessions associated with this Docker Sandboxes workspace can be deleted.');
     }
-    await vscode.workspace.fs.delete(vscode.Uri.file(sessionPath), { useTrash: true });
+    await this.deleteWorkspaceFile(vscode.Uri.file(sessionPath), { useTrash: true });
     return true;
+  }
+
+  private deleteWorkspaceFile(uri: vscode.Uri, options?: { recursive?: boolean; useTrash?: boolean }): Thenable<void> {
+    return vscode.workspace.fs.delete(uri, options);
   }
 
   private async deleteKwardSession(sessionPath: string, displayName: string): Promise<boolean> {
@@ -1841,8 +1845,8 @@ function getWebviewLocalResourceRoots(extensionUri: vscode.Uri): vscode.Uri[] {
 
 function readCurrentSessionFile(workspaceState: vscode.Memento | undefined): string | undefined {
   const value = workspaceState?.get<unknown>(currentSessionFileStorageKey());
-  if (!existsSync(value as string)) {
+  if (typeof value !== 'string' || !value || !existsSync(value)) {
     return undefined;
   }
-  return typeof value === 'string' && value ? value : undefined;
+  return value;
 }

@@ -685,6 +685,9 @@ suite('PiSdkClient', () => {
     assert.strictEqual(await ui.editor('Editor', 'prefill'), 'edited text');
 
     ui.notify('Saved', 'info');
+    assert.strictEqual(ui.theme.fg('warning', 'caution'), '\x1b[33mcaution\x1b[39m');
+    assert.strictEqual(ui.theme.bold('heading'), '\x1b[1mheading\x1b[22m');
+    assert.strictEqual(ui.theme.style('styled', { fg: 'accent', bold: true }), '\x1b[36m\x1b[1mstyled\x1b[22m\x1b[39m');
     ui.setStatus('plan-mode', 'Planning');
     ui.setStatus('plan-mode', undefined);
     const footerFactory = () => ({ render: () => ['footer'], invalidate: () => undefined });

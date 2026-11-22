@@ -121,7 +121,7 @@ export class RemoteExtensionUi {
       // and theme discovery/replacement are deliberately unsupported.
       setWorkingMessage() {}, setWorkingVisible() {}, setWorkingIndicator() {}, setHiddenThinkingLabel() {},
       setHeader() {}, setTitle() {}, setEditorComponent() {}, getEditorComponent: () => undefined,
-      theme: {} as Theme, getAllThemes: () => [], getTheme: () => undefined,
+      theme: taurenTheme as unknown as Theme, getAllThemes: () => [], getTheme: () => undefined,
       setTheme: () => ({ success: false, error: 'Theme switching is not supported in Tauren' })
     };
     this.registrations.push(

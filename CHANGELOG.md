@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Expose Tauren's ANSI theme facade on `ctx.ui.theme` in both the bundled Pi runtime and the Docker Sandboxes server, and initialize Pi's built-in theme in the sandbox server so Pi extensions such as `pi-show-diffs` can style status text and settings views without failing on `ctx.ui.theme.fg`.
 - Rewrite `tauren.sbx.commandProvider` to consume the structured `pi-sbx command` Version 1 JSON specification and use provider-defined configuration values, such as `options.name`, `PI_CODING_AGENT_SESSION_DIR`, and `PI_CODING_AGENT_DIR`, instead of Tauren's generated defaults.
 - Ensure host `sessions` and `PI_CODING_AGENT_DIR` directories exist before launching Docker Sandboxes rather than creating them inside the sandbox server, and improve startup error reporting when an existing sandbox lacks the Tauren server kit.
 - Configure Pi's `CONNECT`-tunneling HTTP proxy dispatcher in the Docker Sandboxes server and emit `model_catalog_updated` after background catalog refreshes so proxy-authenticated and dynamically discovered models appear in the model picker.

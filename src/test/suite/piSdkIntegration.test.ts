@@ -238,7 +238,13 @@ suite('Pi SDK offline integration', () => {
   test('loads a real extension and delivers input source and UI notifications', async () => {
     const sources: string[] = [];
     const notifications: string[] = [];
+    const styledStatuses: string[] = [];
     const fixture = await createFixture([{ text: 'Extension active' }], [pi => {
+      pi.on('session_start', (_event, ctx) => {
+        const status = ctx.ui.theme.fg('warning', 'fixture status');
+        styledStatuses.push(status);
+        ctx.ui.setStatus('fixture-status', status);
+      });
       pi.on('input', (event, ctx) => {
         sources.push(event.source);
         ctx.ui.notify('Fixture extension received input', 'info');
@@ -248,6 +254,7 @@ suite('Pi SDK offline integration', () => {
     try {
       const client = fixture.client(undefined, message => notifications.push(message));
       await completeTurn(client, 'Exercise the extension bridge');
+      assert.deepEqual(styledStatuses, ['\x1b[33mfixture status\x1b[39m']);
       assert.deepEqual(sources, ['rpc']);
       assert.deepEqual(notifications, ['Fixture extension received input']);
     } finally { await fixture.close(); }
