@@ -479,7 +479,7 @@ export class SessionViewController {
       }
 
       this.sessions = this.sessions.filter((entry) => normalizeSessionPath(entry.path) !== normalizedPath);
-      this.options.showToast?.('Session moved to Trash.');
+      this.options.showToast?.(deleted === 'deleted' ? 'Session deleted.' : 'Session moved to Trash.');
 
       if (isCurrentSession) {
         this.sessionsRefreshing = false;

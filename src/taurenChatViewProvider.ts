@@ -7,7 +7,7 @@ import {
   parseWebviewMessage
 } from './sidebar/chatWebview';
 import type { SettingValue, TaurenSettingId } from './settings/settingsRegistry';
-import type { SessionListProgressOptions } from './controller/types';
+import type { SessionDeletionResult, SessionListProgressOptions } from './controller/types';
 import type { WebviewLane, WebviewMessage, WebviewPerfEvent, WebviewScrollCommand, WebviewSessionItem, WebviewStateMessage } from './webviewProtocol/types';
 import { type AgentClientFactory, type AgentClient } from './agent/clientTypes';
 import type { AgentClientOptions } from './agent/types';
@@ -137,6 +137,28 @@ export function createConfiguredAgentClient(
     rejectEditWriteOutsideWorkspace: dependencies.getRejectEditWriteOutsideWorkspace,
     onExtensionLoadError: dependencies.onExtensionLoadError
   });
+}
+
+function isNonTrashDeleteError(error: unknown): boolean {
+  if (error instanceof vscode.FileSystemError) {
+    return (
+      error.code === 'FileNotFound' ||
+      error.code === 'NoPermissions' ||
+      error.code === 'FileIsADirectory' ||
+      error.code === 'FileNotADirectory'
+    );
+  }
+
+  if (isRecord(error) && typeof error.code === 'string') {
+    return (
+      error.code === 'ENOENT' ||
+      error.code === 'EACCES' ||
+      error.code === 'EPERM' ||
+      error.code === 'EISDIR'
+    );
+  }
+
+  return false;
 }
 
 function getQuietStartupFromStateMessage(message: WebviewStateMessage): boolean | undefined {
@@ -1427,20 +1449,21 @@ export class TaurenChatViewProvider implements vscode.WebviewViewProvider, vscod
     return undefined;
   }
 
-  private async deleteSession(sessionPath: string, displayName: string): Promise<boolean> {
+  private async deleteSession(sessionPath: string, displayName: string): Promise<SessionDeletionResult> {
     if (getBackendSetting() === 'kward') {
       return this.deleteKwardSession(sessionPath, displayName);
     }
 
-    if (getConfirmSessionDeletionSetting()) {
-      const moveToTrash = 'Move to Trash';
-      const selected = await vscode.window.showWarningMessage(
-        `Move "${displayName}" to Trash?`,
-        { modal: true, detail: sessionPath },
-        moveToTrash
-      );
+    const useTrash = this.supportsTrash();
 
-      if (selected !== moveToTrash) {
+    if (getConfirmSessionDeletionSetting()) {
+      const actionLabel = useTrash ? 'Move to Trash' : 'Delete Permanently';
+      const promptMessage = useTrash
+        ? `Move "${displayName}" to Trash?`
+        : `Delete "${displayName}" permanently?`;
+      const selected = await this.confirmWarningModal(promptMessage, sessionPath, actionLabel);
+
+      if (selected !== actionLabel) {
         return false;
       }
     }
@@ -1452,22 +1475,62 @@ export class TaurenChatViewProvider implements vscode.WebviewViewProvider, vscod
       for await (const _record of discovery.readRecords(sessionPath)) { associated = true; break; }
       if (!associated) throw new Error('Only sessions associated with this Docker Sandboxes workspace can be deleted.');
     }
-    await this.deleteWorkspaceFile(vscode.Uri.file(sessionPath), { useTrash: true });
-    return true;
+
+    const uri = vscode.Uri.file(sessionPath);
+    if (!useTrash) {
+      await this.deleteWorkspaceFile(uri, { useTrash: false });
+      return 'deleted';
+    }
+
+    try {
+      await this.deleteWorkspaceFile(uri, { useTrash: true });
+      return true;
+    } catch (error) {
+      if (isNonTrashDeleteError(error)) {
+        throw error;
+      }
+
+      const deletePermanently = 'Delete Permanently';
+      const selected = await this.confirmWarningModal(
+        `Unable to move "${displayName}" to Trash. Delete permanently instead?`,
+        sessionPath,
+        deletePermanently
+      );
+
+      if (selected !== deletePermanently) {
+        return false;
+      }
+
+      await this.deleteWorkspaceFile(uri, { useTrash: false });
+      return 'deleted';
+    }
+  }
+
+  private supportsTrash(): boolean {
+    if (!vscode.workspace.getConfiguration('files').get<boolean>('enableTrash', true)) {
+      return false;
+    }
+
+    if (!vscode.env.remoteName) {
+      return this.extensionUri.scheme === 'file';
+    }
+
+    const extensionKind = vscode.extensions.getExtension('kaiwood.tauren')?.extensionKind;
+    return extensionKind === vscode.ExtensionKind.UI && this.extensionUri.scheme === 'file';
+  }
+
+  private confirmWarningModal(message: string, detail: string, actionLabel: string): Thenable<string | undefined> {
+    return vscode.window.showWarningMessage(message, { modal: true, detail }, actionLabel);
   }
 
   private deleteWorkspaceFile(uri: vscode.Uri, options?: { recursive?: boolean; useTrash?: boolean }): Thenable<void> {
     return vscode.workspace.fs.delete(uri, options);
   }
 
-  private async deleteKwardSession(sessionPath: string, displayName: string): Promise<boolean> {
+  private async deleteKwardSession(sessionPath: string, displayName: string): Promise<SessionDeletionResult> {
     if (getConfirmSessionDeletionSetting()) {
       const deleteSession = 'Delete Session';
-      const selected = await vscode.window.showWarningMessage(
-        `Delete "${displayName}"?`,
-        { modal: true, detail: sessionPath },
-        deleteSession
-      );
+      const selected = await this.confirmWarningModal(`Delete "${displayName}"?`, sessionPath, deleteSession);
 
       if (selected !== deleteSession) {
         return false;
@@ -1490,7 +1553,7 @@ export class TaurenChatViewProvider implements vscode.WebviewViewProvider, vscod
       if (!client.deleteSession) {
         throw new Error('Kward backend does not support session deletion yet.');
       }
-      return await client.deleteSession(sessionPath);
+      return (await client.deleteSession(sessionPath)) ? 'deleted' : false;
     } finally {
       client.dispose();
     }

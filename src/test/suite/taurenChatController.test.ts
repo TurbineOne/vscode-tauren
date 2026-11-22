@@ -670,6 +670,33 @@ suite('TaurenChatController', () => {
     harness.controller.dispose();
   });
 
+  test('shows permanent deletion toast when session is deleted without Trash', async () => {
+    const harness = createControllerHarness([new FakePiClient()], {
+      initialSessionFile: '/sessions/current.jsonl',
+      listSessions: async () => [{
+        path: '/sessions/old.jsonl',
+        id: 'old',
+        cwd: '/workspace',
+        name: 'Remote session',
+        created: '2026-01-01T00:00:00.000Z',
+        modified: '2026-01-01T00:01:00.000Z',
+        messageCount: 1,
+        firstMessage: 'Hello',
+        depth: 0,
+        isLast: true,
+        ancestorContinues: [],
+        current: false
+      }],
+      deleteSession: async () => 'deleted'
+    });
+
+    await harness.controller.handleWebviewMessage({ type: 'showLane', lane: 'sessions' });
+    await harness.controller.handleWebviewMessage({ type: 'deleteSession', sessionPath: '/sessions/old.jsonl' });
+
+    assert.deepStrictEqual(harness.toasts, ['Session deleted.']);
+    harness.controller.dispose();
+  });
+
   test('show current changes opens active session diff without creating a Pi client', async () => {
     const shownChanges: Array<{ path: string; name: string }> = [];
     const harness = createControllerHarness([], {
@@ -3616,7 +3643,7 @@ type ControllerHarnessOptions = {
   listSessions?: (cwd: string | undefined, currentSessionFile: string | undefined) => Promise<WebviewSessionItem[]>;
   restartOpenSessions?: () => Promise<number>;
   hasBusyOpenSession?: () => boolean;
-  deleteSession?: (sessionPath: string, displayName: string) => Promise<boolean>;
+  deleteSession?: TaurenChatControllerOptions['deleteSession'];
   showSessionChanges?: (sessionPath: string, displayName: string) => Promise<void>;
   getReadyScript?: () => string | undefined;
   getReadyScriptEnabled?: () => boolean;

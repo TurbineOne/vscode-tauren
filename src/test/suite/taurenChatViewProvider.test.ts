@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import { promises as fs } from 'node:fs';
 import * as vscode from 'vscode';
 import { TaurenChatViewProvider } from '../../taurenChatViewProvider';
+import type { SessionDeletionResult } from '../../controller/types';
 import type { AgentClient } from '../../agent/clientTypes';
 import { initialWebviewState, parseWebviewStateMessage } from '../../webview/state';
 import type { WebviewFullStateMessage, WebviewStateMessage } from '../../webviewProtocol/types';
@@ -16,7 +17,9 @@ import type {
 } from '../../pi/types';
 
 type ProviderWithDeleteSession = {
-  deleteSession(sessionPath: string, displayName: string): Promise<boolean>;
+  deleteSession(sessionPath: string, displayName: string): Promise<SessionDeletionResult>;
+  supportsTrash(): boolean;
+  confirmWarningModal(message: string, detail: string, actionLabel: string): Thenable<string | undefined>;
   deleteWorkspaceFile(uri: vscode.Uri, options?: { recursive?: boolean; useTrash?: boolean }): Thenable<void>;
 };
 
@@ -615,6 +618,182 @@ suite('TaurenChatViewProvider', () => {
       assert.strictEqual(deleteCalls.length, 1);
       assert.strictEqual(deleteCalls[0].uri.fsPath, sessionFile);
       assert.deepStrictEqual(deleteCalls[0].options, { useTrash: true });
+    } finally {
+      provider.dispose();
+      await configuration.update('confirmSessionDeletion', previousValue, vscode.ConfigurationTarget.Global);
+    }
+  });
+
+  test('deletes sessions permanently with confirmation when Trash is unsupported', async () => {
+    const sessionFile = path.join(os.tmpdir(), 'tauren-delete-session', 'remote-session.jsonl');
+    const deleteCalls: { uri: vscode.Uri; options: { recursive?: boolean; useTrash?: boolean } | undefined }[] = [];
+    const prompts: { message: string; detail: string; actionLabel: string }[] = [];
+    const configuration = vscode.workspace.getConfiguration('tauren');
+    const previousValue = configuration.inspect<boolean>('confirmSessionDeletion')?.globalValue;
+    const provider = new TaurenChatViewProvider(vscode.Uri.file('/extension'), () => {
+      throw new Error('Unexpected Pi client creation');
+    });
+    const providerWithDelete = provider as unknown as ProviderWithDeleteSession;
+
+    try {
+      providerWithDelete.supportsTrash = () => false;
+      providerWithDelete.confirmWarningModal = async (message, detail, actionLabel) => {
+        prompts.push({ message, detail, actionLabel });
+        return actionLabel;
+      };
+      providerWithDelete.deleteWorkspaceFile = async (uri, options) => {
+        deleteCalls.push({ uri, options });
+      };
+      await configuration.update('confirmSessionDeletion', true, vscode.ConfigurationTarget.Global);
+
+      const deleted = await providerWithDelete.deleteSession(sessionFile, 'Remote Session');
+
+      assert.strictEqual(deleted, 'deleted');
+      assert.deepStrictEqual(prompts, [{
+        message: 'Delete "Remote Session" permanently?',
+        detail: sessionFile,
+        actionLabel: 'Delete Permanently'
+      }]);
+      assert.strictEqual(deleteCalls.length, 1);
+      assert.strictEqual(deleteCalls[0].uri.fsPath, sessionFile);
+      assert.deepStrictEqual(deleteCalls[0].options, { useTrash: false });
+    } finally {
+      provider.dispose();
+      await configuration.update('confirmSessionDeletion', previousValue, vscode.ConfigurationTarget.Global);
+    }
+  });
+
+  test('deletes sessions permanently without confirmation when Trash is unsupported and confirmation is disabled', async () => {
+    const sessionFile = path.join(os.tmpdir(), 'tauren-delete-session', 'remote-no-confirm.jsonl');
+    const deleteCalls: { uri: vscode.Uri; options: { recursive?: boolean; useTrash?: boolean } | undefined }[] = [];
+    const configuration = vscode.workspace.getConfiguration('tauren');
+    const previousValue = configuration.inspect<boolean>('confirmSessionDeletion')?.globalValue;
+    const provider = new TaurenChatViewProvider(vscode.Uri.file('/extension'), () => {
+      throw new Error('Unexpected Pi client creation');
+    });
+    const providerWithDelete = provider as unknown as ProviderWithDeleteSession;
+
+    try {
+      providerWithDelete.supportsTrash = () => false;
+      providerWithDelete.confirmWarningModal = async () => {
+        throw new Error('Unexpected confirmation modal');
+      };
+      providerWithDelete.deleteWorkspaceFile = async (uri, options) => {
+        deleteCalls.push({ uri, options });
+      };
+      await configuration.update('confirmSessionDeletion', false, vscode.ConfigurationTarget.Global);
+
+      const deleted = await providerWithDelete.deleteSession(sessionFile, 'Remote Session');
+
+      assert.strictEqual(deleted, 'deleted');
+      assert.strictEqual(deleteCalls.length, 1);
+      assert.strictEqual(deleteCalls[0].uri.fsPath, sessionFile);
+      assert.deepStrictEqual(deleteCalls[0].options, { useTrash: false });
+    } finally {
+      provider.dispose();
+      await configuration.update('confirmSessionDeletion', previousValue, vscode.ConfigurationTarget.Global);
+    }
+  });
+
+  test('offers permanent deletion when moving a session to Trash fails because Trash is unavailable', async () => {
+    const sessionFile = path.join(os.tmpdir(), 'tauren-delete-session', 'trash-fallback.jsonl');
+    const deleteCalls: { uri: vscode.Uri; options: { recursive?: boolean; useTrash?: boolean } | undefined }[] = [];
+    const prompts: { message: string; detail: string; actionLabel: string }[] = [];
+    const configuration = vscode.workspace.getConfiguration('tauren');
+    const previousValue = configuration.inspect<boolean>('confirmSessionDeletion')?.globalValue;
+    const provider = new TaurenChatViewProvider(vscode.Uri.file('/extension'), () => {
+      throw new Error('Unexpected Pi client creation');
+    });
+    const providerWithDelete = provider as unknown as ProviderWithDeleteSession;
+
+    try {
+      providerWithDelete.supportsTrash = () => true;
+      providerWithDelete.confirmWarningModal = async (message, detail, actionLabel) => {
+        prompts.push({ message, detail, actionLabel });
+        return actionLabel;
+      };
+      providerWithDelete.deleteWorkspaceFile = async (uri, options) => {
+        deleteCalls.push({ uri, options });
+        if (options?.useTrash) {
+          throw new vscode.FileSystemError(
+            `Unable to delete file '${uri.toString()}' via trash because provider does not support it.`
+          );
+        }
+      };
+      await configuration.update('confirmSessionDeletion', false, vscode.ConfigurationTarget.Global);
+
+      const deleted = await providerWithDelete.deleteSession(sessionFile, 'Fallback Session');
+
+      assert.strictEqual(deleted, 'deleted');
+      assert.deepStrictEqual(prompts, [{
+        message: 'Unable to move "Fallback Session" to Trash. Delete permanently instead?',
+        detail: sessionFile,
+        actionLabel: 'Delete Permanently'
+      }]);
+      assert.strictEqual(deleteCalls.length, 2);
+      assert.deepStrictEqual(deleteCalls[0].options, { useTrash: true });
+      assert.deepStrictEqual(deleteCalls[1].options, { useTrash: false });
+    } finally {
+      provider.dispose();
+      await configuration.update('confirmSessionDeletion', previousValue, vscode.ConfigurationTarget.Global);
+    }
+  });
+
+  test('cancels deletion when Trash fails and permanent deletion is declined', async () => {
+    const sessionFile = path.join(os.tmpdir(), 'tauren-delete-session', 'trash-fallback-cancel.jsonl');
+    const deleteCalls: { uri: vscode.Uri; options: { recursive?: boolean; useTrash?: boolean } | undefined }[] = [];
+    const configuration = vscode.workspace.getConfiguration('tauren');
+    const previousValue = configuration.inspect<boolean>('confirmSessionDeletion')?.globalValue;
+    const provider = new TaurenChatViewProvider(vscode.Uri.file('/extension'), () => {
+      throw new Error('Unexpected Pi client creation');
+    });
+    const providerWithDelete = provider as unknown as ProviderWithDeleteSession;
+
+    try {
+      providerWithDelete.supportsTrash = () => true;
+      providerWithDelete.confirmWarningModal = async () => undefined;
+      providerWithDelete.deleteWorkspaceFile = async (uri, options) => {
+        deleteCalls.push({ uri, options });
+        if (options?.useTrash) {
+          throw new Error('Trash is unavailable');
+        }
+      };
+      await configuration.update('confirmSessionDeletion', false, vscode.ConfigurationTarget.Global);
+
+      const deleted = await providerWithDelete.deleteSession(sessionFile, 'Fallback Session');
+
+      assert.strictEqual(deleted, false);
+      assert.strictEqual(deleteCalls.length, 1);
+      assert.deepStrictEqual(deleteCalls[0].options, { useTrash: true });
+    } finally {
+      provider.dispose();
+      await configuration.update('confirmSessionDeletion', previousValue, vscode.ConfigurationTarget.Global);
+    }
+  });
+
+  test('rethrows missing-file errors without offering permanent deletion', async () => {
+    const sessionFile = path.join(os.tmpdir(), 'tauren-delete-session', 'missing.jsonl');
+    const configuration = vscode.workspace.getConfiguration('tauren');
+    const previousValue = configuration.inspect<boolean>('confirmSessionDeletion')?.globalValue;
+    const provider = new TaurenChatViewProvider(vscode.Uri.file('/extension'), () => {
+      throw new Error('Unexpected Pi client creation');
+    });
+    const providerWithDelete = provider as unknown as ProviderWithDeleteSession;
+
+    try {
+      providerWithDelete.supportsTrash = () => true;
+      providerWithDelete.confirmWarningModal = async () => {
+        throw new Error('Unexpected permanent deletion modal');
+      };
+      providerWithDelete.deleteWorkspaceFile = async (uri) => {
+        throw vscode.FileSystemError.FileNotFound(uri);
+      };
+      await configuration.update('confirmSessionDeletion', false, vscode.ConfigurationTarget.Global);
+
+      await assert.rejects(
+        () => providerWithDelete.deleteSession(sessionFile, 'Missing Session'),
+        (error: unknown) => error instanceof vscode.FileSystemError && error.code === 'FileNotFound'
+      );
     } finally {
       provider.dispose();
       await configuration.update('confirmSessionDeletion', previousValue, vscode.ConfigurationTarget.Global);

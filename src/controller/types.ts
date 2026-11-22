@@ -11,6 +11,8 @@ import type {
 import type { StatePublisherScheduler } from './statePublisher';
 import type { VoiceController } from '../voice/voiceController';
 
+export type SessionDeletionResult = boolean | 'deleted';
+
 export type SessionListProgressOptions = {
   onProgress?: (sessions: WebviewSessionItem[]) => void;
   previousSessions?: readonly WebviewSessionItem[];
@@ -50,7 +52,7 @@ export type TaurenChatControllerOptions = {
     currentSessionFile: string | undefined,
     options?: SessionListProgressOptions
   ) => Promise<WebviewSessionItem[]>;
-  deleteSession?: (sessionPath: string, displayName: string) => Promise<boolean>;
+  deleteSession?: (sessionPath: string, displayName: string) => Promise<SessionDeletionResult>;
   renameOpenSession?: (sessionPath: string, name: string) => Promise<boolean>;
   reloadOpenSessions?: () => Promise<number>;
   restartOpenSessions?: () => Promise<number>;

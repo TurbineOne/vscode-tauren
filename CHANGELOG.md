@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Fall back to permanent session deletion when Trash is unavailable, such as in Remote - SSH workspaces where VS Code's remote filesystem provider does not support Trash, instead of failing with a Trash provider error.
 - Expose Tauren's ANSI theme facade on `ctx.ui.theme` in both the bundled Pi runtime and the Docker Sandboxes server, and initialize Pi's built-in theme in the sandbox server so Pi extensions such as `pi-show-diffs` can style status text and settings views without failing on `ctx.ui.theme.fg`.
 - Rewrite `tauren.sbx.commandProvider` to consume the structured `pi-sbx command` Version 1 JSON specification and use provider-defined configuration values, such as `options.name`, `PI_CODING_AGENT_SESSION_DIR`, and `PI_CODING_AGENT_DIR`, instead of Tauren's generated defaults.
 - Ensure host `sessions` and `PI_CODING_AGENT_DIR` directories exist before launching Docker Sandboxes rather than creating them inside the sandbox server, and improve startup error reporting when an existing sandbox lacks the Tauren server kit.

@@ -107,7 +107,7 @@ The `gh` CLI must be installed and authenticated for sharing. HTML exports and n
 
 ## Delete sessions
 
-Use **Tauren: Move to Trash** from the session list or view toolbar. Tauren asks for confirmation by default. You can change that with `tauren.confirmSessionDeletion`.
+Tauren moves deleted sessions to the system Trash when Trash is available, and it falls back to permanent deletion when Trash is not supported. Use **Tauren: Move to Trash** from the Session List Lane or the Native View Toolbar to remove a session. In remote workspaces such as Remote - SSH, VS Code's remote filesystem provider does not support Trash, so Tauren asks whether to delete the session permanently instead. If moving a session to Trash fails on a local machine, Tauren also offers to delete the session permanently rather than leaving it in place. Confirmation is enabled by default, and you can turn it off with `tauren.confirmSessionDeletion`.
 
 ## Practical habits
 
