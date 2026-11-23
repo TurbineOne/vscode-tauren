@@ -96,12 +96,12 @@ Tauren will add a single boolean setting, `tauren.review.perChangeDiffEnabled`, 
 
 Implement the feature in small, independently verifiable increments. Keep existing `SessionDiffTracker` and `SessionDiffViewer` behavior unchanged throughout.
 
-### 1. Shared review types, preview builder, and inline Pi extension
+### ~~1. Shared review types, preview builder, and inline Pi extension~~ — Completed
 
-- Create `shared/src/review/types.ts` defining `ChangeReviewRequest`, `ChangeReviewDecision`, `ChangeReviewConfig`, and `ChangeReviewHandler`.
-- Create `shared/src/review/preview.ts` to compute in-memory `beforeText`, `afterText`, `isNewFile`, and normalized relative/absolute paths for `edit`, `write`, and `hashline_edit` tool inputs. Skip review cleanly when the target arguments cannot produce a valid preview.
-- Create `shared/src/review/extension.ts` exporting `createPerChangeReviewExtension(options)` as a Pi `ExtensionFactory`. Intercept `tool_call`, check the live enabled and session auto-approve flags, invoke `ChangeReviewHandler` with an `AbortSignal`, and map the returned decision to allow, `{ block: true, reason }`, or `{ block: true, reason }` plus `pi.sendUserMessage(..., { deliverAs: 'steer' })`.
-- **Test gate:** Unit tests in `shared/test/` verify preview generation for `edit` (normal match, fuzzy/line-ending match, invalid match skip) and `write` (new file, overwrite), plus extension decision mapping for `approve`, `approve_session`, `reject`, `steer`, and abort cancellation.
+- ~~Create `shared/src/review/types.ts` defining `ChangeReviewRequest`, `ChangeReviewDecision`, `ChangeReviewConfig`, and `ChangeReviewHandler`.~~
+- ~~Create `shared/src/review/preview.ts` to compute in-memory `beforeText`, `afterText`, `isNewFile`, and normalized relative/absolute paths for `edit`, `write`, and `hashline_edit` tool inputs. Skip review cleanly when the target arguments cannot produce a valid preview.~~
+- ~~Create `shared/src/review/extension.ts` exporting `createPerChangeReviewExtension(options)` as a Pi `ExtensionFactory`. Intercept `tool_call`, check the live enabled and session auto-approve flags, invoke `ChangeReviewHandler` with an `AbortSignal`, and map the returned decision to allow, `{ block: true, reason }`, or `{ block: true, reason }` plus `pi.sendUserMessage(..., { deliverAs: 'steer' })`.~~
+- ~~**Test gate:** Unit tests in `shared/test/` verify preview generation for `edit` (normal match, fuzzy/line-ending match, invalid match skip) and `write` (new file, overwrite), plus extension decision mapping for `approve`, `approve_session`, `reject`, `steer`, and abort cancellation.~~
 
 ### 2. Tauren setting and host VS Code diff review service
 
