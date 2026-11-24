@@ -19,6 +19,7 @@ export type TaurenSettingId =
   | 'tauren.confirmSessionDeletion'
   | 'tauren.restrictFileReferencesToWorkspace'
   | 'tauren.rejectEditWriteOutsideWorkspace'
+  | 'tauren.review.perChangeDiffEnabled'
   | 'tauren.debugPerformance'
   | 'tauren.readyScript'
   | 'tauren.readyScriptEnabled'
@@ -641,6 +642,17 @@ export const settingDefinitions = [
     helper: 'This guardrail does not restrict bash commands.',
     liveBehavior: 'immediate',
     danger: true
+  },
+  {
+    id: 'tauren.review.perChangeDiffEnabled',
+    owner: 'tauren',
+    section: 'workspaceSafety',
+    label: 'Per-change diff review',
+    description: 'Open each proposed file edit or write in a VS Code diff editor before applying it.',
+    control: 'toggle',
+    defaultValue: false,
+    helper: 'Accept, reject, or steer each change from the diff toolbar. Closing the diff tab approves the change.',
+    liveBehavior: 'immediate'
   },
   {
     id: 'tauren.debugPerformance',

@@ -239,6 +239,30 @@
         "command": "tauren.showDiagnostics",
         "title": "Show Diagnostics",
         "category": "Tauren"
+      },
+      {
+        "command": "tauren.review.accept",
+        "title": "Accept Change",
+        "category": "Tauren",
+        "icon": "$(check)"
+      },
+      {
+        "command": "tauren.review.reject",
+        "title": "Reject Change",
+        "category": "Tauren",
+        "icon": "$(close)"
+      },
+      {
+        "command": "tauren.review.steer",
+        "title": "Steer Change",
+        "category": "Tauren",
+        "icon": "$(comment)"
+      },
+      {
+        "command": "tauren.review.approveSession",
+        "title": "Auto-Approve Session",
+        "category": "Tauren",
+        "icon": "$(check-all)"
       }
     ],
     "viewsContainers": {
@@ -261,6 +285,28 @@
       ]
     },
     "menus": {
+      "editor/title": [
+        {
+          "command": "tauren.review.accept",
+          "when": "isInDiffEditor && resourceScheme == tauren-review",
+          "group": "navigation@10"
+        },
+        {
+          "command": "tauren.review.reject",
+          "when": "isInDiffEditor && resourceScheme == tauren-review",
+          "group": "navigation@20"
+        },
+        {
+          "command": "tauren.review.steer",
+          "when": "isInDiffEditor && resourceScheme == tauren-review",
+          "group": "navigation@30"
+        },
+        {
+          "command": "tauren.review.approveSession",
+          "when": "isInDiffEditor && resourceScheme == tauren-review",
+          "group": "navigation@40"
+        }
+      ],
       "editor/context": [
         {
           "command": "tauren.addContext",
@@ -342,6 +388,22 @@
         {
           "command": "tauren.scrollLineDown",
           "when": "false"
+        },
+        {
+          "command": "tauren.review.accept",
+          "when": "isInDiffEditor && resourceScheme == tauren-review"
+        },
+        {
+          "command": "tauren.review.reject",
+          "when": "isInDiffEditor && resourceScheme == tauren-review"
+        },
+        {
+          "command": "tauren.review.steer",
+          "when": "isInDiffEditor && resourceScheme == tauren-review"
+        },
+        {
+          "command": "tauren.review.approveSession",
+          "when": "isInDiffEditor && resourceScheme == tauren-review"
         }
       ],
       "view/title": [
@@ -773,6 +835,11 @@
           "type": "boolean",
           "default": false,
           "description": "Reject Pi engine edit/write tool mutations outside the active workspace folder. This does not restrict bash commands."
+        },
+        "tauren.review.perChangeDiffEnabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Open each proposed edit or write in a VS Code diff editor before applying it, allowing you to accept, reject, or steer per change."
         }
       }
     }

@@ -198,6 +198,10 @@ export function getRejectEditWriteOutsideWorkspaceSetting(): boolean {
   return vscode.workspace.getConfiguration('tauren').get<boolean>('rejectEditWriteOutsideWorkspace', false);
 }
 
+export function getPerChangeDiffReviewEnabledSetting(): boolean {
+  return vscode.workspace.getConfiguration('tauren').get<boolean>('review.perChangeDiffEnabled', false);
+}
+
 export function getDebugPerformanceSetting(): boolean {
   return vscode.workspace.getConfiguration('tauren').get<boolean>('debugPerformance', false);
 }
@@ -253,6 +257,7 @@ export function getTaurenSettingValues(globalState?: vscode.Memento): Partial<Re
     'tauren.confirmSessionDeletion': getConfirmSessionDeletionSetting(),
     'tauren.restrictFileReferencesToWorkspace': getRestrictFileReferencesToWorkspaceSetting(),
     'tauren.rejectEditWriteOutsideWorkspace': getRejectEditWriteOutsideWorkspaceSetting(),
+    'tauren.review.perChangeDiffEnabled': getPerChangeDiffReviewEnabledSetting(),
     'tauren.debugPerformance': getDebugPerformanceSetting(),
     'tauren.readyScript': getReadyScriptSetting() ?? '',
     'tauren.readyScriptEnabled': getReadyScriptEnabledSetting(),

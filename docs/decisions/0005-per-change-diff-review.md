@@ -103,13 +103,13 @@ Implement the feature in small, independently verifiable increments. Keep existi
 - ~~Create `shared/src/review/extension.ts` exporting `createPerChangeReviewExtension(options)` as a Pi `ExtensionFactory`. Intercept `tool_call`, check the live enabled and session auto-approve flags, invoke `ChangeReviewHandler` with an `AbortSignal`, and map the returned decision to allow, `{ block: true, reason }`, or `{ block: true, reason }` plus `pi.sendUserMessage(..., { deliverAs: 'steer' })`.~~
 - ~~**Test gate:** Unit tests in `shared/test/` verify preview generation for `edit` (normal match, fuzzy/line-ending match, invalid match skip) and `write` (new file, overwrite), plus extension decision mapping for `approve`, `approve_session`, `reject`, `steer`, and abort cancellation.~~
 
-### 2. Tauren setting and host VS Code diff review service
+### ~~2. Tauren setting and host VS Code diff review service~~ — Completed
 
-- Add `tauren.review.perChangeDiffEnabled` (default `false`, live-immediate) to `package.json`, `src/settings/settingsRegistry.ts`, and `src/settings/taurenSettings.ts`.
-- Add `src/diff/changeReviewViewer.ts` implementing a `TextDocumentContentProvider` for the `tauren-review:` URI scheme, opening diffs via `vscode.diff`, and closing tabs programmatically via `vscode.window.tabGroups.close` without triggering user-close approval.
-- Add `src/diff/changeReviewController.ts` owning per-session FIFO queueing, active review tracking, `onDidChangeTabs` detection (resolving manual user tab closes as `approve`), explicit abort/dispose cancellation (resolving as rejected without writing to disk), and background-session deferral.
-- Contribute `tauren.review.accept`, `tauren.review.reject`, `tauren.review.steer`, and `tauren.review.approveSession` commands in `package.json` with `editor/title` menu entries gated on `isInDiffEditor && resourceScheme == tauren-review`. Wire `tauren.review.steer` to `vscode.window.showInputBox`.
-- **Test gate:** Extension tests in `src/test/suite/` verify FIFO queueing, Accept/Reject/Steer resolution, manual tab close resolving to `approve`, programmatic abort closing the tab as cancelled/rejected, and cancelling the Steer input box leaving the review pending.
+- ~~Add `tauren.review.perChangeDiffEnabled` (default `false`, live-immediate) to `package.json`, `src/settings/settingsRegistry.ts`, and `src/settings/taurenSettings.ts`.~~
+- ~~Add `src/diff/changeReviewViewer.ts` implementing a `TextDocumentContentProvider` for the `tauren-review:` URI scheme, opening diffs via `vscode.diff`, and closing tabs programmatically via `vscode.window.tabGroups.close` without triggering user-close approval.~~
+- ~~Add `src/diff/changeReviewController.ts` owning per-session FIFO queueing, active review tracking, `onDidChangeTabs` detection (resolving manual user tab closes as `approve`), explicit abort/dispose cancellation (resolving as rejected without writing to disk), and background-session deferral.~~
+- ~~Contribute `tauren.review.accept`, `tauren.review.reject`, `tauren.review.steer`, and `tauren.review.approveSession` commands in `package.json` with `editor/title` menu entries gated on `isInDiffEditor && resourceScheme == tauren-review`. Wire `tauren.review.steer` to `vscode.window.showInputBox`.~~
+- ~~**Test gate:** Extension tests in `src/test/suite/` verify FIFO queueing, Accept/Reject/Steer resolution, manual tab close resolving to `approve`, programmatic abort closing the tab as cancelled/rejected, and cancelling the Steer input box leaving the review pending.~~
 
 ### 3. Wire `PiSdkClient` and Tauren chat controller
 
