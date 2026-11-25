@@ -118,12 +118,12 @@ Implement the feature in small, independently verifiable increments. Keep existi
 - ~~Update `src/taurenChatViewProvider.ts` and `src/taurenChatController.ts` to instantiate `ChangeReviewController`, connect active-session visibility changes, propagate live setting changes, and emit a one-time warning Toast if `pi-show-diffs` is detected while `tauren.review.perChangeDiffEnabled` is true.~~
 - ~~**Test gate:** Offline SDK integration tests in `src/test/suite/piSdkIntegration.test.ts` drive real `edit` and `write` tool calls through `PiSdkClient` and verify that Accept writes the file, manual tab close writes the file, Reject leaves the file untouched, Steer blocks the write and delivers the steering message, and `abort()` unblocks a pending review without writing.~~
 
-### 4. Extend SBX protocol, `sandbox-server`, and `SbxClient`
+### ~~4. Extend SBX protocol, `sandbox-server`, and `SbxClient`~~ — Completed
 
-- Add `review.change` (`RequestType<ChangeReviewRequest, ChangeReviewDecision, void>`) and `review.setConfig` (`NotificationType<ChangeReviewConfig>`) to `shared/src/sbx/contract.ts`, plus optional initial `perChangeReviewEnabled` config in `InitializeParams` (or immediately post-initialize).
-- Update `sandbox-server/src/server.ts` to register `createPerChangeReviewExtension(...)` in `createAgentSessionServices()`, forward review requests to the host over `review.change` with cooperative `CancellationToken` support, advertise `review.change` in `initialize` capabilities, and cancel pending reviews on `chat.abort`, `shutdown`, or EOF.
-- Update `src/sbx/sbxClient.ts` and `src/sbx/extensionClient.ts` to register the `review.change` request handler delegating to `ChangeReviewController`, forward live `tauren.review.perChangeDiffEnabled` changes via `review.setConfig`, and cancel active diff tabs if the SSH connection drops.
-- **Test gate:** Standalone `sandbox-server` tests (`npm run test:sandbox-server`) verify `review.change` round trips, `review.setConfig` live toggling, cancellation on `chat.abort` and EOF, and payload validation. Host `src/test/suite/sbxClient.test.ts` verifies `SbxClient` routing of `review.change` to the host handler and disconnect cleanup.
+- ~~Add `review.change` (`RequestType<ChangeReviewRequest, ChangeReviewDecision, void>`) and `review.setConfig` (`NotificationType<ChangeReviewConfig>`) to `shared/src/sbx/contract.ts`, plus optional initial `perChangeReviewEnabled` config in `InitializeParams` (or immediately post-initialize).~~
+- ~~Update `sandbox-server/src/server.ts` to register `createPerChangeReviewExtension(...)` in `createAgentSessionServices()`, forward review requests to the host over `review.change` with cooperative `CancellationToken` support, advertise `review.change` in `initialize` capabilities, and cancel pending reviews on `chat.abort`, `shutdown`, or EOF.~~
+- ~~Update `src/sbx/sbxClient.ts` and `src/sbx/extensionClient.ts` to register the `review.change` request handler delegating to `ChangeReviewController`, forward live `tauren.review.perChangeDiffEnabled` changes via `review.setConfig`, and cancel active diff tabs if the SSH connection drops.~~
+- ~~**Test gate:** Standalone `sandbox-server` tests (`npm run test:sandbox-server`) verify `review.change` round trips, `review.setConfig` live toggling, cancellation on `chat.abort` and EOF, and payload validation. Host `src/test/suite/sbxClient.test.ts` verifies `SbxClient` routing of `review.change` to the host handler and disconnect cleanup.~~
 
 ### 5. Documentation, changelog, and manual verification
 

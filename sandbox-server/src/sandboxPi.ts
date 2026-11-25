@@ -68,4 +68,4 @@ async function loadSandboxPi(): Promise<typeof import('@earendil-works/pi-coding
 // module replaces that import only in the packaged build, not local SDK tests.
 const sdk = await loadSandboxPi();
 export const { createAgentSessionRuntime, createAgentSessionServices, createAgentSessionFromServices,
-  getAgentDir, getPackageDir, initTheme, SessionManager, SettingsManager, VERSION } = sdk;
+  createEditToolDefinition, getAgentDir, getPackageDir, initTheme, SessionManager, SettingsManager, VERSION } = sdk;

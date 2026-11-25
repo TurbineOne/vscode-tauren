@@ -1097,7 +1097,7 @@ function withoutExtensionUi(value: unknown): unknown {
     return value;
   }
 
-  const { extensionUi: _extensionUi, ...rest } = value as Record<string, unknown>;
+  const { extensionUi: _extensionUi, changeReview: _changeReview, ...rest } = value as Record<string, unknown>;
   return rest;
 }
 

@@ -1,4 +1,12 @@
 import { ErrorCodes, NotificationType, RequestType, ResponseError } from 'vscode-jsonrpc';
+import type {
+  ChangeReviewConfig,
+  ChangeReviewDecision,
+  ChangeReviewRequest,
+  ChangeReviewToolName
+} from '../review/types.js';
+
+export type { ChangeReviewConfig, ChangeReviewDecision, ChangeReviewRequest, ChangeReviewToolName };
 
 export const PROTOCOL_VERSION = 1 as const;
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
@@ -24,6 +32,7 @@ export interface InitializeParams {
   workspace: string;
   sessionDirectory: string;
   sessionFile?: string;
+  perChangeReviewEnabled?: boolean;
 }
 export interface InitializeResult {
   protocolVersion: typeof PROTOCOL_VERSION;
@@ -157,6 +166,11 @@ export const UiRequests = {
   terminalInput: new RequestType<TerminalInputParams, TerminalInputResult, void>('ui.terminalInput')
 };
 
+/** Reverse per-change diff review request sent server -> host before file writes. */
+export const ReviewRequests = {
+  change: new RequestType<ChangeReviewRequest, ChangeReviewDecision, void>('review.change')
+};
+
 export interface EventParams { sequence: number; event: Snapshot }
 export interface DiagnosticParams { level: 'info' | 'warning' | 'error'; message: string }
 export interface NotifyParams { message: string; notifyType: string }
@@ -189,5 +203,6 @@ export const Notifications = {
   toolsExpanded: new NotificationType<ExpandedParams>('ui.toolsExpanded'), // host -> server
   setEditorText: new NotificationType<EditorTextParams>('ui.setEditorText'),
   pasteToEditor: new NotificationType<EditorTextParams>('ui.pasteToEditor'),
-  terminalInputSubscription: new NotificationType<SubscriptionParams>('ui.terminalInputSubscription')
+  terminalInputSubscription: new NotificationType<SubscriptionParams>('ui.terminalInputSubscription'),
+  setReviewConfig: new NotificationType<ChangeReviewConfig>('review.setConfig') // host -> server
 };

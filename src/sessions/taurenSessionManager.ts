@@ -9,6 +9,7 @@ import type {
   ExtensionPromptKind,
   ExtensionUi
 } from '../extensionUi/types';
+import type { AgentClient } from '../agent/clientTypes';
 import type { ChangeReviewController } from '../diff/changeReviewController';
 import type { TaurenChatControllerOptions } from '../controller/types';
 import type { ThinkingLevelStepDirection } from '../controller/thinkingLevelSteps';
@@ -112,6 +113,7 @@ type OpenSession = {
   outboundStateMessage: WebviewStateMessage | undefined;
   forceFullStatePost: boolean;
   pendingComposerPaste: { text: string; revision: number } | undefined;
+  activeAgentClient?: AgentClient;
 };
 
 export class TaurenSessionManager {
@@ -458,6 +460,15 @@ export class TaurenSessionManager {
     }
 
     await this.options.updateTaurenSetting(settingId, value);
+    if (settingId === 'tauren.review.perChangeDiffEnabled' && typeof value === 'boolean') {
+      this.syncPerChangeReviewSetting(value);
+    }
+  }
+
+  public syncPerChangeReviewSetting(enabled: boolean): void {
+    for (const session of this.sessions) {
+      session.activeAgentClient?.setPerChangeReviewEnabled?.(enabled);
+    }
   }
 
   private syncExtensionSettingsFromOptions(): boolean {
@@ -566,16 +577,23 @@ export class TaurenSessionManager {
     const extensionFooterHost = this.createExtensionFooterHost(id, extensionStatuses);
     const extensionWidgetHost = this.createExtensionWidgetHost(id);
     const extensionUi = this.createSessionExtensionUi(id, customUiHost, extensionFooterHost, extensionWidgetHost);
+    // `changeReview` is always passed in production by `TaurenChatViewProvider`
+    // and omitted in unit tests that exercise `TaurenSessionManager` directly.
     const changeReview = this.options.changeReview;
-    const sessionCreateClient: TaurenChatControllerOptions['createClient'] = changeReview
-      ? (clientOptions) => this.options.createClient({
-        ...clientOptions,
-        changeReview: clientOptions.changeReview ?? {
-          isEnabled: () => changeReview.isEnabled(),
-          reviewChange: (request, signal) => changeReview.controller.reviewChange(id, request, signal)
+    const sessionCreateClient: TaurenChatControllerOptions['createClient'] = (clientOptions) => {
+      const resolvedClientOptions = changeReview
+        ? {
+          ...clientOptions,
+          changeReview: clientOptions.changeReview ?? {
+            isEnabled: () => changeReview.isEnabled(),
+            reviewChange: (request, signal) => changeReview.controller.reviewChange(id, request, signal)
+          }
         }
-      })
-      : this.options.createClient;
+        : clientOptions;
+      const client = this.options.createClient(resolvedClientOptions);
+      session.activeAgentClient = client;
+      return client;
+    };
     const session: OpenSession = {
       id,
       controller: new TaurenChatController({

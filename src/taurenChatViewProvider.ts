@@ -399,6 +399,7 @@ export class TaurenChatViewProvider implements vscode.WebviewViewProvider, vscod
         }
 
         if (event.affectsConfiguration('tauren.review.perChangeDiffEnabled')) {
+          this.controller.syncPerChangeReviewSetting(getPerChangeDiffReviewEnabledSetting());
           this.maybeWarnPiShowDiffsOverlap();
         }
 

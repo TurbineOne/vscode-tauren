@@ -1,7 +1,7 @@
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { homedir } from 'node:os';
-import { CancellationTokenSource, Notifications, Requests, type MessageConnection } from '@tauren/shared/sbx/protocol';
+import { CancellationTokenSource, Notifications, Requests, ReviewRequests, type ChangeReviewDecision, type MessageConnection } from '@tauren/shared/sbx/protocol';
 import type { AgentClient } from '../agent/clientTypes';
 import type { PiClientOptions, PiEvent, PiImageContent, PiOAuthLoginCallbacks, PiPromptStreamingBehavior } from '../pi/types';
 import type { PiSettingId, SettingValue } from '../settings/settingsRegistry';
@@ -56,6 +56,10 @@ export class SbxClient implements AgentClient {
   private completionCapabilities = { triggerCharacters: [] as string[], generation: 0 };
   // Cleanup uses these tokens to cancel outstanding requests.
   private readonly pending = new Set<CancellationTokenSource>();
+  // Active host-side diff review controllers cancelled on abort or disconnect.
+  private readonly pendingReviews = new Set<AbortController>();
+  // Latest live toggle pushed by the host, overriding initial `isEnabled()` if set.
+  private reviewEnabledOverride?: boolean;
 
   // These options supply connection settings and host callbacks for this client.
   constructor(private readonly options: SbxClientOptions) {
@@ -91,6 +95,7 @@ export class SbxClient implements AgentClient {
     this.controller = controller;
     let ready = false;
     const lifecycle = new SandboxLifecycle({ ...this.options.lifecycle,
+      ...(this.options.changeReview ? { perChangeReviewEnabled: this.isReviewEnabled() } : {}),
       configureConnection: connection => {
         if (this.disposed || generation !== this.generation) throw new Error('Sandbox connection superseded');
         this.installConnection(connection, generation, () => ready);
@@ -100,6 +105,10 @@ export class SbxClient implements AgentClient {
     const work = lifecycle.open(controller.signal, this.sessionFile).then(async session => {
       if (this.disposed || generation !== this.generation) { await session.dispose(); throw new Error('Sandbox connection superseded'); }
       this.session = session;
+      if (this.options.changeReview && session.handshake.capabilities.includes(ReviewRequests.change.method)) {
+        void session.connection.sendNotification(Notifications.setReviewConfig, { enabled: this.isReviewEnabled() })
+          .catch(() => undefined);
+      }
       // Resolve the actual persisted path immediately, so an interrupted first
       // turn can subsequently reconnect to this session instead of a new one.
       const state = validate.validateState(await bounded(session.connection.sendRequest(Requests.getState, null),
@@ -128,6 +137,21 @@ export class SbxClient implements AgentClient {
     this.bridge = new SbxExtensionUiBridge(connection,
       this.options.extensionUi ?? createCancellingExtensionUi(() => undefined), message => this.emitError(message));
     this.subscriptions.push(
+      connection.onRequest(ReviewRequests.change, async (params, token): Promise<ChangeReviewDecision> => {
+        const request = validate.validateChangeReviewRequest(params);
+        if (!active()) return { action: 'cancel', reason: `Cancelled diff review for ${request.path}.` };
+        if (!this.options.changeReview || !this.isReviewEnabled()) return { action: 'approve' };
+        const reviewController = new AbortController();
+        this.pendingReviews.add(reviewController);
+        const cancelSubscription = token.onCancellationRequested(() => reviewController.abort());
+        if (token.isCancellationRequested) reviewController.abort();
+        try {
+          return await this.options.changeReview.reviewChange(request, reviewController.signal);
+        } finally {
+          cancelSubscription.dispose();
+          this.pendingReviews.delete(reviewController);
+        }
+      }),
       connection.onNotification(Notifications.event, value => {
         if (!active()) return;
         try {
@@ -186,7 +210,24 @@ export class SbxClient implements AgentClient {
   async prompt(message: string, streamingBehavior?: PiPromptStreamingBehavior, images?: PiImageContent[]): Promise<void> {
     await this.none(Requests.prompt.method, { message, ...(streamingBehavior ? { streamingBehavior } : {}), ...(images?.length ? { images } : {}) });
   }
-  abort(): Promise<void> { return this.none(Requests.abort.method); }
+  abort(): Promise<void> {
+    this.cancelPendingReviews();
+    return this.none(Requests.abort.method);
+  }
+  setPerChangeReviewEnabled(enabled: boolean): void {
+    this.reviewEnabledOverride = enabled;
+    if (this.disposed || this.disconnected || !this.session) return;
+    if (!this.session.handshake.capabilities.includes(ReviewRequests.change.method)) return;
+    void this.session.connection.sendNotification(Notifications.setReviewConfig, { enabled })
+      .catch(() => this.emitError('Failed to update sandbox change review configuration'));
+  }
+  private isReviewEnabled(): boolean {
+    return this.reviewEnabledOverride ?? this.options.changeReview?.isEnabled() ?? false;
+  }
+  private cancelPendingReviews(): void {
+    for (const controller of [...this.pendingReviews]) controller.abort();
+    this.pendingReviews.clear();
+  }
   reload(): Promise<void> { return this.none(Requests.reload.method); }
   async getState() {
     const state = await this.request(Requests.getState.method, null, validate.validateState);
@@ -262,6 +303,7 @@ export class SbxClient implements AgentClient {
 
   private emitError(message: string): void { for (const listener of this.errors) { try { listener(message); } catch { /* Observers do not own transport lifetime. */ } } }
   private detachUi(): void {
+    this.cancelPendingReviews();
     this.bridge?.dispose(); this.bridge = undefined;
     for (const subscription of this.subscriptions.splice(0)) subscription.dispose();
   }
