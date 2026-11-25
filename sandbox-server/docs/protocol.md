@@ -173,6 +173,14 @@ records, secret values, or credential source paths.
   array of file/selection queries. Omitting `sessionFile` scans only associated
   files in the initialized store, preserving path-match precedence over
   content-only matches. No global session-store fallback is permitted.
+
+## Per-change diff review
+
+Per-change diff review uses the same shared inline Pi extension (`@tauren/shared/review/extension`) inside the sandbox server as in the bundled Pi SDK backend, so tool interception and preview computation behave identically across both runtimes.
+
+- **Initial and live configuration:** `InitializeParams` accepts an optional `perChangeReviewEnabled` boolean so the server knows whether to intercept file edits as soon as the session starts. When the user toggles `tauren.review.perChangeDiffEnabled` on the host, `SbxClient` pushes the new state to the server through the `review.setConfig` (`{ enabled: boolean }`) host-to-server notification, avoiding reverse round trips on tool calls while the feature is disabled.
+- **Reverse review request (`review.change`):** The server advertises `review.change` in its `initialize` capabilities. When per-change review is enabled and a reviewable `edit`, `write`, or `hashline_edit` tool call produces a valid text preview, the server sends a `review.change` request (`ChangeReviewRequest`) to the host and awaits a validated `ChangeReviewDecision` (`approve`, `approve_session`, `reject`, `steer`, or `cancel`).
+- **Cancellation and disconnect cleanup:** `chat.abort`, `shutdown`, session invalidation, and connection EOF cancel any in-flight `review.change` request through its JSON-RPC `CancellationToken` and resolve the extension gate as cancelled so no file is written to disk. On the host, `SbxClient` aborts its pending review `AbortController` instances on `abort()`, `dispose()`, and unexpected disconnect so open VS Code diff tabs close cleanly without triggering manual-close approval.
 ### UI parity scope
 
 The target is parity with Tauren's existing bundled Pi backend, not every API
@@ -232,6 +240,7 @@ cwd-bound `SettingsManager`. Bind/rebind events and UI after session replacement
 | [x] | custom/widget/footer | Server-local component factories, remote render/input/invalidation/disposal |
 | [x] | status/notify/composer/toolsExpanded | Bidirectional intent/state mapping |
 | [x] | terminal input | Ordered interception with consume/transform response |
+| [x] | review.change / review.setConfig | Inline pre-apply diff review extension, reverse `review.change` request, live `review.setConfig` notification, cooperative cancellation |
 
 Runtime setting mapping: defaultProvider -> settings; defaultModel -> setModel;
 defaultThinkingLevel -> session thinking setter; hideThinkingBlock/quietStartup ->

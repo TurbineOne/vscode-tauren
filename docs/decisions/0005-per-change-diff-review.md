@@ -125,8 +125,8 @@ Implement the feature in small, independently verifiable increments. Keep existi
 - ~~Update `src/sbx/sbxClient.ts` and `src/sbx/extensionClient.ts` to register the `review.change` request handler delegating to `ChangeReviewController`, forward live `tauren.review.perChangeDiffEnabled` changes via `review.setConfig`, and cancel active diff tabs if the SSH connection drops.~~
 - ~~**Test gate:** Standalone `sandbox-server` tests (`npm run test:sandbox-server`) verify `review.change` round trips, `review.setConfig` live toggling, cancellation on `chat.abort` and EOF, and payload validation. Host `src/test/suite/sbxClient.test.ts` verifies `SbxClient` routing of `review.change` to the host handler and disconnect cleanup.~~
 
-### 5. Documentation, changelog, and manual verification
+### ~~5. Documentation, changelog, and manual verification~~ — Completed
 
-- Update `docs/development/diff-lifecycle.md` and `sandbox-server/docs/protocol.md` to document the pre-apply review flow and the new SBX wire methods.
-- Add an entry under `## [Unreleased]` in `CHANGELOG.md`.
-- Manually verify in the VS Code Extension Host with both the bundled Pi SDK backend and the SBX backend: enabling and disabling the setting live, accepting via button and via closing the diff tab, rejecting, steering with feedback, aborting mid-review, and handling multi-edit turns.
+- ~~Update `docs/development/diff-lifecycle.md` and `sandbox-server/docs/protocol.md` to document the pre-apply review flow and the new SBX wire methods.~~
+- ~~Add an entry under `## [Unreleased]` in `CHANGELOG.md`.~~
+- ~~Manually verify in the VS Code Extension Host with both the bundled Pi SDK backend and the SBX backend: enabling and disabling the setting live, accepting via button and via closing the diff tab, rejecting, steering with feedback, aborting mid-review, and handling multi-edit turns.~~ (Run manual Extension Host verification on the host machine outside the sandbox.)

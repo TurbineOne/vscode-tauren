@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Add opt-in per-change pre-apply diff review (`tauren.review.perChangeDiffEnabled`) for both the bundled Pi SDK and Docker Sandboxes (`sbx`) backends. When enabled, each proposed `edit`, `write`, or `hashline_edit` opens in a native VS Code diff editor where you can accept, reject, steer the model with feedback, auto-approve the rest of the session, or close the diff tab to approve.
+
 ## [0.2.0] - 2026-11-23
 
 - Fall back to permanent session deletion when Trash is unavailable, such as in Remote - SSH workspaces where VS Code's remote filesystem provider does not support Trash, instead of failing with a Trash provider error.
