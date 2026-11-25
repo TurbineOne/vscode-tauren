@@ -1,3 +1,4 @@
+import type { ChangeReviewHandler } from '@tauren/shared/review/types';
 import type { ExtensionUi } from '../extensionUi/types';
 
 export type PiEventBase = Record<string, unknown> & {
@@ -309,9 +310,15 @@ export type PiMessagesResult = {
 
 export type PiPromptStreamingBehavior = 'steer' | 'followUp';
 
+export type PiChangeReviewBridge = {
+  isEnabled: () => boolean;
+  reviewChange: ChangeReviewHandler;
+};
+
 export type PiClientOptions = {
   cwd?: string;
   sessionFile?: string;
   resumeLastSession?: boolean;
   extensionUi?: ExtensionUi;
+  changeReview?: PiChangeReviewBridge;
 };

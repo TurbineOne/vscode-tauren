@@ -1,3 +1,4 @@
+import { ErrorCodes, ResponseError, type ChangeReviewRequest } from '@tauren/shared/sbx/protocol';
 import type * as Pi from '../pi/types';
 import type { ComposerCompletionApplied, ComposerCompletionCapabilities, ComposerCompletionResult } from '@tauren/shared/completion/types';
 import type { WebviewTreeItem } from '../webviewProtocol/types';
@@ -122,4 +123,54 @@ export function validateEventEnvelope(value: unknown, previousSequence: number):
     if (event.type === 'turn_end') optional(array(message))(event.toolResults);
     if (event.type === 'compaction_end') optional(nullable(compact))(event.result);
   });
+}
+
+const allowedReviewKeys = new Set([
+  'toolCallId', 'toolName', 'path', 'absolutePath', 'beforeText', 'afterText', 'isNewFile'
+]);
+
+function failReviewRequest(): never {
+  throw new ResponseError(ErrorCodes.InvalidParams, 'Invalid sandbox change review parameters');
+}
+
+export function validateChangeReviewRequest(value: unknown): ChangeReviewRequest {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    failReviewRequest();
+  }
+
+  const record = value as Record<string, unknown>;
+  for (const key of Object.keys(record)) {
+    if (!allowedReviewKeys.has(key)) {
+      failReviewRequest();
+    }
+  }
+
+  if (typeof record.toolCallId !== 'string' || !record.toolCallId) {
+    failReviewRequest();
+  }
+  if (record.toolName !== 'edit' && record.toolName !== 'write' && record.toolName !== 'hashline_edit') {
+    failReviewRequest();
+  }
+  if (typeof record.path !== 'string' || !record.path.trim() || record.path.includes('\0')) {
+    failReviewRequest();
+  }
+  if (typeof record.absolutePath !== 'string' || !record.absolutePath.trim() || record.absolutePath.includes('\0')) {
+    failReviewRequest();
+  }
+  if (typeof record.beforeText !== 'string' || typeof record.afterText !== 'string') {
+    failReviewRequest();
+  }
+  if (typeof record.isNewFile !== 'boolean') {
+    failReviewRequest();
+  }
+
+  return {
+    toolCallId: record.toolCallId,
+    toolName: record.toolName,
+    path: record.path,
+    absolutePath: record.absolutePath,
+    beforeText: record.beforeText,
+    afterText: record.afterText,
+    isNewFile: record.isNewFile
+  };
 }

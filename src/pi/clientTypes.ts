@@ -56,6 +56,8 @@ export type PiClient = {
   setModel(provider: string, modelId: string): Promise<PiModel>;
   setThinkingLevel(level: string): Promise<void>;
   updateRuntimeSetting?(settingId: PiSettingId, value: SettingValue): Promise<{ applied: 'live' | 'reload'; message?: string }>;
+  /** Push live per-change diff review config to remote backends such as SBX. */
+  setPerChangeReviewEnabled?(enabled: boolean): void;
   setSessionName(name: string): Promise<void>;
   compact(customInstructions?: string): Promise<PiCompactResult>;
   exportHtml(outputPath?: string): Promise<PiExportHtmlResult>;

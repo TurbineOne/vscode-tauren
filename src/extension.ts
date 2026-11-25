@@ -56,7 +56,11 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('tauren.addContext', () => provider.addContext()),
     vscode.commands.registerCommand('tauren.sendSelectionToComposer', () => provider.sendSelectionToComposer()),
     vscode.commands.registerCommand('tauren.traceOrigin', () => provider.traceOrigin()),
-    vscode.commands.registerCommand('tauren.showDiagnostics', () => provider.showDiagnostics())
+    vscode.commands.registerCommand('tauren.showDiagnostics', () => provider.showDiagnostics()),
+    vscode.commands.registerCommand('tauren.review.accept', (uri?: vscode.Uri) => provider.acceptChangeReview(uri)),
+    vscode.commands.registerCommand('tauren.review.reject', (uri?: vscode.Uri) => provider.rejectChangeReview(uri)),
+    vscode.commands.registerCommand('tauren.review.steer', (uri?: vscode.Uri) => provider.steerChangeReview(uri)),
+    vscode.commands.registerCommand('tauren.review.approveSession', (uri?: vscode.Uri) => provider.approveSessionChangeReview(uri))
   );
 }
 

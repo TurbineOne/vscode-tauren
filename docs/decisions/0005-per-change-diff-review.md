@@ -96,34 +96,34 @@ Tauren will add a single boolean setting, `tauren.review.perChangeDiffEnabled`, 
 
 Implement the feature in small, independently verifiable increments. Keep existing `SessionDiffTracker` and `SessionDiffViewer` behavior unchanged throughout.
 
-### 1. Shared review types, preview builder, and inline Pi extension
+### ~~1. Shared review types, preview builder, and inline Pi extension~~ — Completed
 
-- Create `shared/src/review/types.ts` defining `ChangeReviewRequest`, `ChangeReviewDecision`, `ChangeReviewConfig`, and `ChangeReviewHandler`.
-- Create `shared/src/review/preview.ts` to compute in-memory `beforeText`, `afterText`, `isNewFile`, and normalized relative/absolute paths for `edit`, `write`, and `hashline_edit` tool inputs. Skip review cleanly when the target arguments cannot produce a valid preview.
-- Create `shared/src/review/extension.ts` exporting `createPerChangeReviewExtension(options)` as a Pi `ExtensionFactory`. Intercept `tool_call`, check the live enabled and session auto-approve flags, invoke `ChangeReviewHandler` with an `AbortSignal`, and map the returned decision to allow, `{ block: true, reason }`, or `{ block: true, reason }` plus `pi.sendUserMessage(..., { deliverAs: 'steer' })`.
-- **Test gate:** Unit tests in `shared/test/` verify preview generation for `edit` (normal match, fuzzy/line-ending match, invalid match skip) and `write` (new file, overwrite), plus extension decision mapping for `approve`, `approve_session`, `reject`, `steer`, and abort cancellation.
+- ~~Create `shared/src/review/types.ts` defining `ChangeReviewRequest`, `ChangeReviewDecision`, `ChangeReviewConfig`, and `ChangeReviewHandler`.~~
+- ~~Create `shared/src/review/preview.ts` to compute in-memory `beforeText`, `afterText`, `isNewFile`, and normalized relative/absolute paths for `edit`, `write`, and `hashline_edit` tool inputs. Skip review cleanly when the target arguments cannot produce a valid preview.~~
+- ~~Create `shared/src/review/extension.ts` exporting `createPerChangeReviewExtension(options)` as a Pi `ExtensionFactory`. Intercept `tool_call`, check the live enabled and session auto-approve flags, invoke `ChangeReviewHandler` with an `AbortSignal`, and map the returned decision to allow, `{ block: true, reason }`, or `{ block: true, reason }` plus `pi.sendUserMessage(..., { deliverAs: 'steer' })`.~~
+- ~~**Test gate:** Unit tests in `shared/test/` verify preview generation for `edit` (normal match, fuzzy/line-ending match, invalid match skip) and `write` (new file, overwrite), plus extension decision mapping for `approve`, `approve_session`, `reject`, `steer`, and abort cancellation.~~
 
-### 2. Tauren setting and host VS Code diff review service
+### ~~2. Tauren setting and host VS Code diff review service~~ — Completed
 
-- Add `tauren.review.perChangeDiffEnabled` (default `false`, live-immediate) to `package.json`, `src/settings/settingsRegistry.ts`, and `src/settings/taurenSettings.ts`.
-- Add `src/diff/changeReviewViewer.ts` implementing a `TextDocumentContentProvider` for the `tauren-review:` URI scheme, opening diffs via `vscode.diff`, and closing tabs programmatically via `vscode.window.tabGroups.close` without triggering user-close approval.
-- Add `src/diff/changeReviewController.ts` owning per-session FIFO queueing, active review tracking, `onDidChangeTabs` detection (resolving manual user tab closes as `approve`), explicit abort/dispose cancellation (resolving as rejected without writing to disk), and background-session deferral.
-- Contribute `tauren.review.accept`, `tauren.review.reject`, `tauren.review.steer`, and `tauren.review.approveSession` commands in `package.json` with `editor/title` menu entries gated on `isInDiffEditor && resourceScheme == tauren-review`. Wire `tauren.review.steer` to `vscode.window.showInputBox`.
-- **Test gate:** Extension tests in `src/test/suite/` verify FIFO queueing, Accept/Reject/Steer resolution, manual tab close resolving to `approve`, programmatic abort closing the tab as cancelled/rejected, and cancelling the Steer input box leaving the review pending.
+- ~~Add `tauren.review.perChangeDiffEnabled` (default `false`, live-immediate) to `package.json`, `src/settings/settingsRegistry.ts`, and `src/settings/taurenSettings.ts`.~~
+- ~~Add `src/diff/changeReviewViewer.ts` implementing a `TextDocumentContentProvider` for the `tauren-review:` URI scheme, opening diffs via `vscode.diff`, and closing tabs programmatically via `vscode.window.tabGroups.close` without triggering user-close approval.~~
+- ~~Add `src/diff/changeReviewController.ts` owning per-session FIFO queueing, active review tracking, `onDidChangeTabs` detection (resolving manual user tab closes as `approve`), explicit abort/dispose cancellation (resolving as rejected without writing to disk), and background-session deferral.~~
+- ~~Contribute `tauren.review.accept`, `tauren.review.reject`, `tauren.review.steer`, and `tauren.review.approveSession` commands in `package.json` with `editor/title` menu entries gated on `isInDiffEditor && resourceScheme == tauren-review`. Wire `tauren.review.steer` to `vscode.window.showInputBox`.~~
+- ~~**Test gate:** Extension tests in `src/test/suite/` verify FIFO queueing, Accept/Reject/Steer resolution, manual tab close resolving to `approve`, programmatic abort closing the tab as cancelled/rejected, and cancelling the Steer input box leaving the review pending.~~
 
-### 3. Wire `PiSdkClient` and Tauren chat controller
+### ~~3. Wire `PiSdkClient` and Tauren chat controller~~ — Completed
 
-- Extend `PiClientOptions` in `src/pi/types.ts` with the optional `changeReview` bridge (handler, live enabled getter, and session-abort cancellation wiring).
-- Update `src/sdk/piSdkClient.ts` to pass `createPerChangeReviewExtension(...)` into `createAgentSessionServices({ ..., resourceLoaderOptions: { extensionFactories } })`. Ensure `abort()` and `dispose()` abort any in-flight review signal immediately so the session never hangs waiting on a closed or aborted turn.
-- Update `src/taurenChatViewProvider.ts` and `src/taurenChatController.ts` to instantiate `ChangeReviewController`, connect active-session visibility changes, propagate live setting changes, and emit a one-time warning Toast if `pi-show-diffs` is detected while `tauren.review.perChangeDiffEnabled` is true.
-- **Test gate:** Offline SDK integration tests in `src/test/suite/piSdkIntegration.test.ts` drive real `edit` and `write` tool calls through `PiSdkClient` and verify that Accept writes the file, manual tab close writes the file, Reject leaves the file untouched, Steer blocks the write and delivers the steering message, and `abort()` unblocks a pending review without writing.
+- ~~Extend `PiClientOptions` in `src/pi/types.ts` with the optional `changeReview` bridge (handler, live enabled getter, and session-abort cancellation wiring).~~
+- ~~Update `src/sdk/piSdkClient.ts` to pass `createPerChangeReviewExtension(...)` into `createAgentSessionServices({ ..., resourceLoaderOptions: { extensionFactories } })`. Ensure `abort()` and `dispose()` abort any in-flight review signal immediately so the session never hangs waiting on a closed or aborted turn.~~
+- ~~Update `src/taurenChatViewProvider.ts` and `src/taurenChatController.ts` to instantiate `ChangeReviewController`, connect active-session visibility changes, propagate live setting changes, and emit a one-time warning Toast if `pi-show-diffs` is detected while `tauren.review.perChangeDiffEnabled` is true.~~
+- ~~**Test gate:** Offline SDK integration tests in `src/test/suite/piSdkIntegration.test.ts` drive real `edit` and `write` tool calls through `PiSdkClient` and verify that Accept writes the file, manual tab close writes the file, Reject leaves the file untouched, Steer blocks the write and delivers the steering message, and `abort()` unblocks a pending review without writing.~~
 
-### 4. Extend SBX protocol, `sandbox-server`, and `SbxClient`
+### ~~4. Extend SBX protocol, `sandbox-server`, and `SbxClient`~~ — Completed
 
-- Add `review.change` (`RequestType<ChangeReviewRequest, ChangeReviewDecision, void>`) and `review.setConfig` (`NotificationType<ChangeReviewConfig>`) to `shared/src/sbx/contract.ts`, plus optional initial `perChangeReviewEnabled` config in `InitializeParams` (or immediately post-initialize).
-- Update `sandbox-server/src/server.ts` to register `createPerChangeReviewExtension(...)` in `createAgentSessionServices()`, forward review requests to the host over `review.change` with cooperative `CancellationToken` support, advertise `review.change` in `initialize` capabilities, and cancel pending reviews on `chat.abort`, `shutdown`, or EOF.
-- Update `src/sbx/sbxClient.ts` and `src/sbx/extensionClient.ts` to register the `review.change` request handler delegating to `ChangeReviewController`, forward live `tauren.review.perChangeDiffEnabled` changes via `review.setConfig`, and cancel active diff tabs if the SSH connection drops.
-- **Test gate:** Standalone `sandbox-server` tests (`npm run test:sandbox-server`) verify `review.change` round trips, `review.setConfig` live toggling, cancellation on `chat.abort` and EOF, and payload validation. Host `src/test/suite/sbxClient.test.ts` verifies `SbxClient` routing of `review.change` to the host handler and disconnect cleanup.
+- ~~Add `review.change` (`RequestType<ChangeReviewRequest, ChangeReviewDecision, void>`) and `review.setConfig` (`NotificationType<ChangeReviewConfig>`) to `shared/src/sbx/contract.ts`, plus optional initial `perChangeReviewEnabled` config in `InitializeParams` (or immediately post-initialize).~~
+- ~~Update `sandbox-server/src/server.ts` to register `createPerChangeReviewExtension(...)` in `createAgentSessionServices()`, forward review requests to the host over `review.change` with cooperative `CancellationToken` support, advertise `review.change` in `initialize` capabilities, and cancel pending reviews on `chat.abort`, `shutdown`, or EOF.~~
+- ~~Update `src/sbx/sbxClient.ts` and `src/sbx/extensionClient.ts` to register the `review.change` request handler delegating to `ChangeReviewController`, forward live `tauren.review.perChangeDiffEnabled` changes via `review.setConfig`, and cancel active diff tabs if the SSH connection drops.~~
+- ~~**Test gate:** Standalone `sandbox-server` tests (`npm run test:sandbox-server`) verify `review.change` round trips, `review.setConfig` live toggling, cancellation on `chat.abort` and EOF, and payload validation. Host `src/test/suite/sbxClient.test.ts` verifies `SbxClient` routing of `review.change` to the host handler and disconnect cleanup.~~
 
 ### 5. Documentation, changelog, and manual verification
 

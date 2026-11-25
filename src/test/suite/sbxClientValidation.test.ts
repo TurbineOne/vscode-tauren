@@ -142,4 +142,35 @@ suite('sbx client payload validation', () => {
       { type: 'agent_end', messages: [{ role: false }] }, { type: 'turn_end', toolResults: [null] },
       { type: 'compaction_end', result: { tokensBefore: 'bad' } }, { type: 'auto_retry_end', success: 'yes' }]) rejects(decode, event);
   });
+
+  test('validates incoming sandbox change review requests strictly', () => {
+    const valid = {
+      toolCallId: 'call-1',
+      toolName: 'edit' as const,
+      path: 'src/app.ts',
+      absolutePath: '/workspace/src/app.ts',
+      beforeText: 'a\n',
+      afterText: 'b\n',
+      isNewFile: false
+    };
+    assert.deepEqual(validate.validateChangeReviewRequest(valid), valid);
+    for (const invalidValue of [
+      null,
+      [],
+      { ...valid, extra: true },
+      { ...valid, toolCallId: '' },
+      { ...valid, toolName: 'bash' },
+      { ...valid, path: '' },
+      { ...valid, path: 'a\0b' },
+      { ...valid, absolutePath: '' },
+      { ...valid, beforeText: 42 },
+      { ...valid, afterText: null },
+      { ...valid, isNewFile: 'false' }
+    ]) {
+      assert.throws(
+        () => validate.validateChangeReviewRequest(invalidValue),
+        (err: unknown) => err instanceof Error && (err as { code?: number }).code === -32602
+      );
+    }
+  });
 });

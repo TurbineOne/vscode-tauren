@@ -4,9 +4,11 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import {
   createAgentSessionRuntime, createAgentSessionServices, createAgentSessionFromServices,
-  getAgentDir, getPackageDir, initTheme, SessionManager, SettingsManager, VERSION, type AgentSessionRuntime
+  createEditToolDefinition, getAgentDir, getPackageDir, initTheme, SessionManager, SettingsManager, VERSION, type AgentSessionRuntime
 } from '@earendil-works/pi-coding-agent';
 import { ErrorCodes, ResponseError, type MessageConnection } from '@tauren/shared/sbx/protocol';
+import { createPerChangeReviewExtension } from '@tauren/shared/review/extension';
+import { RemoteChangeReview } from './changeReview.js';
 import { registerRuntimeControls } from './runtimeControls.js';
 import { PiAutocompleteRegistry } from '@tauren/shared/completion/piAutocompleteRegistry';
 import { registerSessionControls, validateSessionPath } from './sessionControls.js';
@@ -21,6 +23,7 @@ interface ServerConfiguration {
   workspace: string;
   sessionDirectory: string;
   sessionFile?: string;
+  perChangeReviewEnabled?: boolean;
 }
 
 /** Convert SDK snapshots to JSON, omitting undefined optional fields. */
@@ -53,6 +56,9 @@ async function validateInitializeParams(input: unknown): Promise<ServerConfigura
   if (!Number.isInteger(params.protocolVersion) || typeof params.clientVersion !== 'string') {
     throw new ResponseError(ErrorCodes.InvalidParams, 'initialize requires protocolVersion and clientVersion');
   }
+  if (params.perChangeReviewEnabled !== undefined && typeof params.perChangeReviewEnabled !== 'boolean') {
+    throw new ResponseError(ErrorCodes.InvalidParams, 'perChangeReviewEnabled must be a boolean');
+  }
   assertProtocolVersion(params.protocolVersion as number);
   try {
     const workspace = await fs.realpath(absolute(params.workspace, 'workspace'));
@@ -75,7 +81,12 @@ async function validateInitializeParams(input: unknown): Promise<ServerConfigura
         throw new Error('sessionFile workspace does not match initialize workspace');
       }
     }
-    return { workspace, sessionDirectory, ...(sessionFile ? { sessionFile } : {}) };
+    return {
+      workspace,
+      sessionDirectory,
+      ...(sessionFile ? { sessionFile } : {}),
+      ...(typeof params.perChangeReviewEnabled === 'boolean' ? { perChangeReviewEnabled: params.perChangeReviewEnabled } : {})
+    };
   } catch (error) {
     if (error instanceof ResponseError) throw error;
     throw new ResponseError(TaurenErrorCodes.IncompatibleRuntime,
@@ -195,6 +206,7 @@ export function registerServer(connection: MessageConnection, serverVersion: str
   const ui = new RemoteExtensionUi(connection, {
     autocompleteRegistry: completions, getCwd: () => runtime?.cwd ?? process.cwd(), diagnostic
   });
+  const review = new RemoteChangeReview(connection, diagnostic);
   const renderer = new PiSdkRenderer(() => ui.getToolsExpanded());
   const event = (value: unknown) => {
     if (stopped) return;
@@ -215,6 +227,7 @@ export function registerServer(connection: MessageConnection, serverVersion: str
   async function initialize(input: unknown): Promise<InitializeResult> {
     const config = await validateInitializeParams(input);
     if (stopped) throw new Error('Server stopped during initialization');
+    review.applyInitialEnabled(config.perChangeReviewEnabled ?? false);
     // One process per connection: cwd/env changes cannot affect other clients.
     sessionDirectory = config.sessionDirectory;
     process.chdir(config.workspace);
@@ -239,7 +252,20 @@ export function registerServer(connection: MessageConnection, serverVersion: str
       const settingsManager = options.cwd === config.workspace && options.agentDir === agentDir
         ? initialSettings
         : SettingsManager.create(options.cwd, options.agentDir);
-      const services = await createAgentSessionServices({ cwd: options.cwd, agentDir: options.agentDir, settingsManager });
+      const services = await createAgentSessionServices({
+        cwd: options.cwd,
+        agentDir: options.agentDir,
+        settingsManager,
+        resourceLoaderOptions: {
+          extensionFactories: [
+            createPerChangeReviewExtension({
+              isEnabled: () => review.isEnabled(),
+              createEditToolDefinition,
+              reviewChange: (request, signal) => review.reviewChange(request, signal)
+            })
+          ]
+        }
+      });
       const created = await createAgentSessionFromServices({ services, sessionManager: options.sessionManager,
         sessionStartEvent: options.sessionStartEvent });
       return { ...created, services, diagnostics: services.diagnostics };
@@ -248,7 +274,7 @@ export function registerServer(connection: MessageConnection, serverVersion: str
     for (const entry of runtime.diagnostics) diagnostic(`${entry.type}: ${entry.message}`);
     // Replacements create a new SDK session and extension runner. Detach UI
     // synchronously before old contexts become stale, then bind the new owner.
-    runtime.setBeforeSessionInvalidate(() => { ui.reset(); completions.reset(); renderer.reset(); unsubscribe?.(); });
+    runtime.setBeforeSessionInvalidate(() => { review.cancelReviews(); ui.reset(); completions.reset(); renderer.reset(); unsubscribe?.(); });
     runtime.setRebindSession(async () => { await bindRuntime(); });
     await bindRuntime();
     if (stopped) throw new Error('Server stopped during initialization');
@@ -317,9 +343,10 @@ export function registerServer(connection: MessageConnection, serverVersion: str
   capabilities.push(...registerSessionControls(connection, {
     getRuntime: () => { active(); return runtime!; }, mutate,
     getSessionDirectory: () => sessionDirectory,
-    cancelInteractions: () => ui.cancelInteractions()
+    cancelInteractions: () => { review.cancelReviews(); ui.cancelInteractions(); }
   }));
   capabilities.push(...ui.capabilityMethods);
+  capabilities.push(...review.capabilityMethods);
   capabilities.push(...registerRuntimeControls(connection, active, diagnostic, event));
   // Restore from SDK history and rerun custom renderers, never from a cached
   // host transcript. Rendered text is presentation only, not persisted session data.
@@ -358,6 +385,7 @@ export function registerServer(connection: MessageConnection, serverVersion: str
       const cancel = () => {
         cancelled = true;
         finish(new ResponseError(TaurenErrorCodes.Cancelled, 'Prompt request cancelled'));
+        review.cancelReviews();
         ui.cancelInteractions();
         void abortSession(session).catch(() => diagnostic('Prompt cancellation failed'));
       };
@@ -391,6 +419,7 @@ export function registerServer(connection: MessageConnection, serverVersion: str
   connection.onRequest(Requests.abort, async input => {
     if (input !== null && input !== undefined) throw new ResponseError(ErrorCodes.InvalidParams, 'abort takes no parameters');
     const session = active();
+    review.cancelReviews();
     ui.cancelInteractions();
     for (const cancel of cancelPreflights) cancel();
     await abortSession(session);
@@ -418,7 +447,7 @@ export function registerServer(connection: MessageConnection, serverVersion: str
     // Both wire reload and ctx.reload() reserve the runtime; the invoking slash
     // command may be pending, but no other prompt may enter during teardown.
     reloading = true;
-    const resetOwners = () => { ui.reset(); renderer.reset(); completions.reset(); };
+    const resetOwners = () => { review.cancelReviews(); ui.reset(); renderer.reset(); completions.reset(); };
     resetOwners();
     const work = session.reload({ beforeSessionStart: async () => {
       // Old session_shutdown hooks may create UI. Remove it only after they
@@ -471,6 +500,7 @@ export function registerServer(connection: MessageConnection, serverVersion: str
     if (!cleanup) cleanup = (async () => {
       // Cancel reverse UI before waiting: initialization or a session mutation
       // may itself be blocked in an extension's dialog/custom surface.
+      review.dispose();
       ui.dispose();
       await initializing?.catch(() => undefined);
       unsubscribe?.();

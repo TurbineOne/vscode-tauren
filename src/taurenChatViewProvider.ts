@@ -8,7 +8,7 @@ import {
 } from './sidebar/chatWebview';
 import type { SettingValue, TaurenSettingId } from './settings/settingsRegistry';
 import type { SessionDeletionResult, SessionListProgressOptions } from './controller/types';
-import type { WebviewLane, WebviewMessage, WebviewPerfEvent, WebviewScrollCommand, WebviewSessionItem, WebviewStateMessage } from './webviewProtocol/types';
+import type { WebviewLane, WebviewMessage, WebviewPerfEvent, WebviewScrollCommand, WebviewSessionItem, WebviewStartupResourceSection, WebviewStateMessage } from './webviewProtocol/types';
 import { type AgentClientFactory, type AgentClient } from './agent/clientTypes';
 import type { AgentClientOptions } from './agent/types';
 import { PiSdkClient } from './sdk/piSdkClient';
@@ -21,6 +21,8 @@ import type { CustomUiHostMessage } from './extensionUi/customUiHost';
 import type { ExtensionEditorHostMessage, ExtensionPromptHostMessage, ExtensionUi } from './extensionUi/types';
 import { createSessionDiffStatsFileWatcher, readSessionDiffSnapshot, writeSessionDiffSnapshot } from './diff/sessionDiffStorage';
 import { SessionDiffViewer } from './diff/sessionDiffViewer';
+import { ChangeReviewController } from './diff/changeReviewController';
+import { ChangeReviewViewer, createVscodeChangeReviewHost } from './diff/changeReviewViewer';
 import { ShikiCodeRenderer } from './highlighting/shikiCodeRenderer';
 import { TaurenSessionManager } from './sessions/taurenSessionManager';
 import type { PiPromptImageAttachment } from './taurenChatController';
@@ -64,6 +66,7 @@ import {
   getCustomUiThemeSetting,
   getDebugPerformanceSetting,
   getOutputColorsSetting,
+  getPerChangeDiffReviewEnabledSetting,
   getReadyScriptEnabledSetting,
   getReadyScriptSetting,
   getRejectEditWriteOutsideWorkspaceSetting,
@@ -179,6 +182,18 @@ export class TaurenChatViewProvider implements vscode.WebviewViewProvider, vscod
   private readonly controller: TaurenSessionManager;
   private readonly codeRenderer = new ShikiCodeRenderer();
   private readonly sessionDiffViewer = new SessionDiffViewer((message, notifyType) => this.showNotification(message, notifyType));
+  private readonly changeReviewController = new ChangeReviewController({
+    host: createVscodeChangeReviewHost(
+      new ChangeReviewViewer(),
+      (_sessionId, request) => this.showToast(`A background session is waiting for diff review on ${request.path}.`, 'warning')
+    )
+  });
+  // Cached startup resource sections from Pi so overlap checks work even when
+  // `tauren.review.perChangeDiffEnabled` is toggled on after startup.
+  private lastStartupResources: WebviewStartupResourceSection[] | undefined;
+  // Ensures the `pi-show-diffs` coexistence warning Toast is shown at most once
+  // per VS Code window instead of repeating on every state post or config save.
+  private warnedPiShowDiffsOverlap = false;
   private contextUsagePollTimer: NodeJS.Timeout | undefined;
   private sessionDiffStatsRefreshTimer: NodeJS.Timeout | undefined;
   private lastWorkspaceCwd: string | undefined;
@@ -270,6 +285,10 @@ export class TaurenChatViewProvider implements vscode.WebviewViewProvider, vscod
       },
       postState: (message) => {
         this.setBusyContext(message.busy);
+        if (message.startupResources) {
+          this.lastStartupResources = message.startupResources;
+          this.maybeWarnPiShowDiffsOverlap();
+        }
         void this.webviewView?.webview.postMessage(this.withProviderState(message));
       },
       showNotification: (message, notifyType) => this.showNotification(message, notifyType),
@@ -310,6 +329,10 @@ export class TaurenChatViewProvider implements vscode.WebviewViewProvider, vscod
         displayName,
         readSessionDiffSnapshot(this.workspaceState, sessionPath)
       ),
+      changeReview: {
+        controller: this.changeReviewController,
+        isEnabled: () => getPerChangeDiffReviewEnabledSetting()
+      },
       voiceController: this.voiceController
     });
 
@@ -373,6 +396,11 @@ export class TaurenChatViewProvider implements vscode.WebviewViewProvider, vscod
 
         if (event.affectsConfiguration('tauren.rejectEditWriteOutsideWorkspace')) {
           this.handleWorkspaceFoldersChanged();
+        }
+
+        if (event.affectsConfiguration('tauren.review.perChangeDiffEnabled')) {
+          this.controller.syncPerChangeReviewSetting(getPerChangeDiffReviewEnabledSetting());
+          this.maybeWarnPiShowDiffsOverlap();
         }
 
         if (event.affectsConfiguration('editor.tokenColorCustomizations') || event.affectsConfiguration('editor.semanticTokenColorCustomizations')) {
@@ -446,6 +474,7 @@ export class TaurenChatViewProvider implements vscode.WebviewViewProvider, vscod
     this.sandboxOutputChannel?.dispose();
     this.codeRenderer.dispose();
     this.sessionDiffViewer.dispose();
+    this.changeReviewController.dispose();
     this.voiceController.dispose();
     this.controller.dispose();
   }
@@ -651,6 +680,45 @@ export class TaurenChatViewProvider implements vscode.WebviewViewProvider, vscod
 
   public async runMemoryAction(action: KwardMemoryAction): Promise<void> {
     await this.controller.runMemoryAction(action);
+  }
+
+  public async acceptChangeReview(targetUri?: vscode.Uri): Promise<void> {
+    await this.changeReviewController.accept(targetUri);
+  }
+
+  public async rejectChangeReview(targetUri?: vscode.Uri): Promise<void> {
+    await this.changeReviewController.reject(targetUri);
+  }
+
+  public async steerChangeReview(targetUri?: vscode.Uri): Promise<void> {
+    await this.changeReviewController.steer(targetUri);
+  }
+
+  public async approveSessionChangeReview(targetUri?: vscode.Uri): Promise<void> {
+    await this.changeReviewController.approveSession(targetUri);
+  }
+
+  /**
+   * Warn once if Tauren's per-change diff review is enabled while the
+   * third-party `pi-show-diffs` extension is also loaded, because both hooks
+   * would otherwise prompt on the same tool call. Reads `lastStartupResources`
+   * (the cached startup sections reported by Pi) so the check works whether
+   * the setting was already on at startup or toggled on later.
+   */
+  private maybeWarnPiShowDiffsOverlap(): void {
+    if (this.warnedPiShowDiffsOverlap || !getPerChangeDiffReviewEnabledSetting()) {
+      return;
+    }
+
+    if (!hasPiShowDiffsExtension(this.lastStartupResources)) {
+      return;
+    }
+
+    this.warnedPiShowDiffsOverlap = true;
+    this.showToast(
+      'Tauren per-change diff review is enabled while pi-show-diffs is loaded. Disable pi-show-diffs or set it to auto-approve to avoid duplicate review prompts.',
+      'warning'
+    );
   }
 
   public async toggleSettings(): Promise<void> {
@@ -1912,4 +1980,22 @@ function readCurrentSessionFile(workspaceState: vscode.Memento | undefined): str
     return undefined;
   }
   return value;
+}
+
+function hasPiShowDiffsExtension(sections: WebviewStartupResourceSection[] | undefined): boolean {
+  if (!Array.isArray(sections)) {
+    return false;
+  }
+
+  for (const section of sections) {
+    if (section.name.toLowerCase() !== 'extensions') {
+      continue;
+    }
+
+    if (section.items.some((item) => item.toLowerCase().includes('pi-show-diffs'))) {
+      return true;
+    }
+  }
+
+  return false;
 }

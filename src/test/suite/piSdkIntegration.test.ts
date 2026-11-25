@@ -6,8 +6,11 @@ import { pathToFileURL } from 'node:url';
 import type { AssistantMessage, Model, Api, SimpleStreamOptions, AssistantMessageEventStream } from '@earendil-works/pi-ai';
 import { PiSdkClient } from '../../sdk/piSdkClient';
 import { loadPiSdk, type PiSdkModule } from '../../sdk/piSdkLoader';
-import type { PiEvent } from '../../pi/types';
+import type { PiChangeReviewBridge, PiEvent } from '../../pi/types';
 import { createCancellingExtensionUi } from '../../extensionUi/types';
+import { ChangeReviewController, type ChangeReviewHost } from '../../diff/changeReviewController';
+import { changeReviewScheme, getChangeReviewIdFromUri, type ChangeReviewUriLike } from '../../diff/changeReviewUri';
+import type { ChangeReviewRequest } from '@tauren/shared/review/types';
 
 const provider = 'tauren-offline-fixture';
 const modelId = 'scripted';
@@ -132,7 +135,9 @@ async function createFixture(replies: Reply[], extensionFactories: import('@eare
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 32000, maxTokens: 1000 }]
       });
       return sdk.createAgentSessionServices({ ...options, modelRuntime, resourceLoaderOptions: {
-        noExtensions: true, extensionFactories, disabledBuiltinExtensions: ['mcp'], noSkills: true,
+        noExtensions: true,
+        extensionFactories: [...(options.resourceLoaderOptions?.extensionFactories ?? []), ...extensionFactories],
+        disabledBuiltinExtensions: ['mcp'], noSkills: true,
         noPromptTemplates: true, noThemes: true, noContextFiles: true, systemPrompt: 'Offline test fixture.'
       } });
     },
@@ -154,9 +159,10 @@ async function createFixture(replies: Reply[], extensionFactories: import('@eare
     workspace,
     disposeClients,
     get requests() { return requests; },
-    client(sessionFile?: string, showNotification?: (message: string, type: string) => void) {
+    client(sessionFile?: string, showNotification?: (message: string, type: string) => void, changeReview?: PiChangeReviewBridge) {
       const client = new PiSdkClient({ cwd: workspace, sessionFile,
         extensionUi: createCancellingExtensionUi(showNotification ?? (() => undefined)),
+        changeReview,
         loadSdk: async () => isolatedSdk });
       clients.push(client);
       return client;
@@ -275,5 +281,147 @@ suite('Pi SDK offline integration', () => {
       await completeTurn(client, 'Try again');
       assert.equal((await client.getLastAssistantText()).text, 'Recovered');
     } finally { await fixture.close(); }
+  });
+
+  test('per-change diff review gates write and edit via accept, tab close, reject, steer, and abort', async () => {
+    function createReviewHarness() {
+      const opened: Array<{ reviewId: string; request: ChangeReviewRequest }> = [];
+      const closeListeners = new Set<(reviewId: string) => void>();
+      let onOpenResolve: ((entry: { reviewId: string; request: ChangeReviewRequest }) => void) | undefined;
+      let activeReviewId: string | undefined;
+      let steerFeedback: string | undefined;
+
+      const host: ChangeReviewHost = {
+        async openDiff(reviewId, request) {
+          const beforeUri: ChangeReviewUriLike = {
+            scheme: changeReviewScheme, authority: 'before', path: `/${reviewId}/${request.path}`,
+            toString: () => `${changeReviewScheme}://before/${reviewId}/${request.path}`
+          };
+          const afterUri: ChangeReviewUriLike = {
+            scheme: changeReviewScheme, authority: 'after', path: `/${reviewId}/${request.path}`,
+            toString: () => `${changeReviewScheme}://after/${reviewId}/${request.path}`
+          };
+          const entry = { reviewId, request };
+          opened.push(entry);
+          activeReviewId = reviewId;
+          onOpenResolve?.(entry);
+          onOpenResolve = undefined;
+          return { beforeUri, afterUri };
+        },
+        async closeDiff(_beforeUri, afterUri) {
+          const id = getChangeReviewIdFromUri(afterUri);
+          if (id) {
+            for (const listener of closeListeners) listener(id);
+          }
+        },
+        deleteReviewContent() {},
+        onDidCloseDiffTab(listener) {
+          closeListeners.add(listener);
+          return { dispose: () => closeListeners.delete(listener) };
+        },
+        async promptSteerFeedback() { return steerFeedback; },
+        getActiveReviewId() { return activeReviewId; }
+      };
+
+      const controller = new ChangeReviewController({ host, activeSessionId: 'session-1' });
+      const waitForOpen = (index: number): Promise<{ reviewId: string; request: ChangeReviewRequest }> => {
+        if (opened[index]) return Promise.resolve(opened[index]!);
+        return new Promise((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error(`Timed out waiting for review #${index}`)), 8000);
+          onOpenResolve = (entry) => { clearTimeout(timer); resolve(entry); };
+        });
+      };
+
+      return {
+        controller,
+        opened,
+        waitForOpen,
+        setSteerFeedback(value: string) { steerFeedback = value; },
+        closeTabManually(reviewId: string) {
+          for (const listener of closeListeners) listener(reviewId);
+        }
+      };
+    }
+
+    // 1. Accept (write) + manual tab close (edit) + reject (edit) + steer (edit)
+    const fixture = await createFixture([
+      { tool: 'write', args: { path: 'reviewed.txt', content: 'v1\n' } },
+      { tool: 'edit', args: { path: 'reviewed.txt', oldText: 'v1', newText: 'v2' } },
+      { tool: 'edit', args: { path: 'reviewed.txt', oldText: 'v2', newText: 'v3-rejected' } },
+      { tool: 'edit', args: { path: 'reviewed.txt', oldText: 'v2', newText: 'v4-steered' } },
+      { text: 'Steer received' }
+    ]);
+    const harness = createReviewHarness();
+    try {
+      const client = fixture.client(undefined, undefined, {
+        isEnabled: () => true,
+        reviewChange: (request, signal) => harness.controller.reviewChange('session-1', request, signal)
+      });
+
+      const settled = nextEvent(client, 'agent_settled');
+      const promptPromise = client.prompt('Apply reviewed edits');
+
+      // First change (write v1): accept explicitly.
+      const first = await harness.waitForOpen(0);
+      assert.equal(first.request.toolName, 'write');
+      assert.equal(first.request.isNewFile, true);
+      await harness.controller.accept();
+
+      // Second change (edit v1 -> v2): close tab manually -> auto-approves.
+      const second = await harness.waitForOpen(1);
+      assert.equal(second.request.toolName, 'edit');
+      assert.equal(second.request.beforeText, 'v1\n');
+      assert.equal(second.request.afterText, 'v2\n');
+      harness.closeTabManually(second.reviewId);
+
+      // Third change (edit v2 -> v3-rejected): reject -> file stays v2.
+      await harness.waitForOpen(2);
+      await harness.controller.reject(undefined, 'Do not write v3');
+
+      // Fourth change (edit v2 -> v4-steered): steer -> blocks write and delivers steer message.
+      await harness.waitForOpen(3);
+      harness.setSteerFeedback('Keep v2 and explain why');
+      await harness.controller.steer();
+
+      await promptPromise;
+      await settled;
+
+      assert.equal(await fs.readFile(path.join(fixture.workspace, 'reviewed.txt'), 'utf8'), 'v2\n');
+      const messagesJson = JSON.stringify((await client.getMessages()).messages);
+      assert.match(messagesJson, /Keep v2 and explain why/);
+      assert.equal((await client.getLastAssistantText()).text, 'Steer received');
+    } finally {
+      harness.controller.dispose();
+      await fixture.close();
+    }
+
+    // 2. abort() unblocks a pending review without writing to disk, and a recovery turn still works.
+    const abortFixture = await createFixture([
+      { tool: 'write', args: { path: 'aborted.txt', content: 'should-not-write\n' } },
+      { text: 'Recovered after review abort' }
+    ]);
+    const abortHarness = createReviewHarness();
+    try {
+      const client = abortFixture.client(undefined, undefined, {
+        isEnabled: () => true,
+        reviewChange: (request, signal) => abortHarness.controller.reviewChange('session-1', request, signal)
+      });
+
+      const settled = nextEvent(client, 'agent_settled');
+      const promptPromise = client.prompt('Write aborted file');
+      await abortHarness.waitForOpen(0);
+
+      await client.abort();
+      await promptPromise;
+      await settled;
+
+      await assert.rejects(() => fs.access(path.join(abortFixture.workspace, 'aborted.txt')));
+
+      await completeTurn(client, 'Continue after abort');
+      assert.equal((await client.getLastAssistantText()).text, 'Recovered after review abort');
+    } finally {
+      abortHarness.controller.dispose();
+      await abortFixture.close();
+    }
   });
 });

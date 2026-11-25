@@ -486,4 +486,69 @@ suite('SBX client malformed/failed server boundaries', function () {
       await assert.rejects(client.getMessages(), /disposed/i);
     } finally { await fixture.close(); }
   });
+
+  test('routes review.change to host changeReview bridge, syncs live config, and cancels on abort or disconnect', async () => {
+    const fixture = await createFixture();
+    try {
+      let enabled = true;
+      const seen: Array<{ toolName: string; path: string; beforeText: string; afterText: string }> = [];
+      let callCount = 0;
+      const switchingClient = fixture.client({
+        changeReview: {
+          isEnabled: () => enabled,
+          reviewChange: async (request) => {
+            callCount += 1;
+            seen.push({
+              toolName: request.toolName,
+              path: request.path,
+              beforeText: request.beforeText,
+              afterText: request.afterText
+            });
+            return callCount === 1 ? { action: 'approve' } : { action: 'reject', reason: 'Stop before after' };
+          }
+        }
+      });
+
+      await completeTurn(switchingClient, 'tools-roundtrip');
+      assert.equal(seen.length, 2);
+      assert.equal(seen[0]?.toolName, 'write');
+      assert.equal(seen[1]?.toolName, 'edit');
+      assert.equal(await fs.readFile(path.join(fixture.workspace, 'roundtrip.txt'), 'utf8'), 'before\n');
+
+      // Live toggle off via setPerChangeReviewEnabled pushes review.setConfig so edit proceeds without review.
+      enabled = false;
+      switchingClient.setPerChangeReviewEnabled(false);
+      await completeTurn(switchingClient, 'tools-roundtrip');
+      assert.equal(seen.length, 2);
+      assert.equal(await fs.readFile(path.join(fixture.workspace, 'roundtrip.txt'), 'utf8'), 'after\n');
+
+      // Turn back on and verify disconnect aborts an in-flight host review signal immediately.
+      enabled = true;
+      switchingClient.setPerChangeReviewEnabled(true);
+      await fs.unlink(path.join(fixture.workspace, 'roundtrip.txt'));
+
+      let reviewAborted = false;
+      let resolveReviewEntered!: () => void;
+      const reviewEntered = new Promise<void>(resolve => { resolveReviewEntered = resolve; });
+      const disconnectClient = fixture.client({
+        changeReview: {
+          isEnabled: () => true,
+          reviewChange: (_request, signal) => new Promise((resolve) => {
+            resolveReviewEntered();
+            signal.addEventListener('abort', () => {
+              reviewAborted = true;
+              resolve({ action: 'cancel' });
+            }, { once: true });
+          })
+        }
+      });
+
+      await disconnectClient.prompt('tools-roundtrip');
+      await bounded(reviewEntered, 'host review entered');
+      // Simulate SSH drop by disposing the underlying connection.
+      fixture.connections.at(-1)?.dispose();
+      await delay(50);
+      assert.equal(reviewAborted, true);
+    } finally { await fixture.close(); }
+  });
 });

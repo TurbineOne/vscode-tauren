@@ -9,6 +9,8 @@ import type {
   ExtensionPromptKind,
   ExtensionUi
 } from '../extensionUi/types';
+import type { AgentClient } from '../agent/clientTypes';
+import type { ChangeReviewController } from '../diff/changeReviewController';
 import type { TaurenChatControllerOptions } from '../controller/types';
 import type { ThinkingLevelStepDirection } from '../controller/thinkingLevelSteps';
 import type { KwardMemoryAction } from '../kward/memoryActions';
@@ -33,6 +35,10 @@ export type TaurenSessionManagerOptions = TaurenChatControllerOptions & {
   extensionPrompt?: {
     isAvailable(): boolean;
     postMessage(message: ExtensionPromptHostMessage): boolean;
+  };
+  changeReview?: {
+    controller: ChangeReviewController;
+    isEnabled: () => boolean;
   };
 };
 
@@ -107,6 +113,7 @@ type OpenSession = {
   outboundStateMessage: WebviewStateMessage | undefined;
   forceFullStatePost: boolean;
   pendingComposerPaste: { text: string; revision: number } | undefined;
+  activeAgentClient?: AgentClient;
 };
 
 export class TaurenSessionManager {
@@ -139,6 +146,7 @@ export class TaurenSessionManager {
 
     for (const session of this.sessions.splice(0)) {
       this.clearInactiveDisposal(session);
+      void this.options.changeReview?.controller.cancelSession(session.id, 'Session manager disposed.');
       session.customUiHost?.dispose();
       session.extensionFooterHost.dispose();
       session.extensionWidgetHost.dispose();
@@ -395,6 +403,7 @@ export class TaurenSessionManager {
     for (const session of this.sessions) {
       if (session.id !== this.activeSessionId) {
         this.clearInactiveDisposal(session);
+        void this.options.changeReview?.controller.cancelSession(session.id, 'Session restarted.');
         session.customUiHost?.dispose();
         session.extensionFooterHost.dispose();
         session.extensionWidgetHost.dispose();
@@ -451,6 +460,15 @@ export class TaurenSessionManager {
     }
 
     await this.options.updateTaurenSetting(settingId, value);
+    if (settingId === 'tauren.review.perChangeDiffEnabled' && typeof value === 'boolean') {
+      this.syncPerChangeReviewSetting(value);
+    }
+  }
+
+  public syncPerChangeReviewSetting(enabled: boolean): void {
+    for (const session of this.sessions) {
+      session.activeAgentClient?.setPerChangeReviewEnabled?.(enabled);
+    }
   }
 
   private syncExtensionSettingsFromOptions(): boolean {
@@ -559,10 +577,28 @@ export class TaurenSessionManager {
     const extensionFooterHost = this.createExtensionFooterHost(id, extensionStatuses);
     const extensionWidgetHost = this.createExtensionWidgetHost(id);
     const extensionUi = this.createSessionExtensionUi(id, customUiHost, extensionFooterHost, extensionWidgetHost);
+    // `changeReview` is always passed in production by `TaurenChatViewProvider`
+    // and omitted in unit tests that exercise `TaurenSessionManager` directly.
+    const changeReview = this.options.changeReview;
+    const sessionCreateClient: TaurenChatControllerOptions['createClient'] = (clientOptions) => {
+      const resolvedClientOptions = changeReview
+        ? {
+          ...clientOptions,
+          changeReview: clientOptions.changeReview ?? {
+            isEnabled: () => changeReview.isEnabled(),
+            reviewChange: (request, signal) => changeReview.controller.reviewChange(id, request, signal)
+          }
+        }
+        : clientOptions;
+      const client = this.options.createClient(resolvedClientOptions);
+      session.activeAgentClient = client;
+      return client;
+    };
     const session: OpenSession = {
       id,
       controller: new TaurenChatController({
         ...this.options,
+        createClient: sessionCreateClient,
         extensionUi,
         getTaurenSettingValues: () => this.getTaurenSettingValues(),
         updateTaurenSetting: (settingId, value) => this.updateTaurenSetting(settingId, value),
@@ -603,6 +639,7 @@ export class TaurenSessionManager {
 
     if (!this.activeSessionId || options.activate) {
       this.activeSessionId = id;
+      this.options.changeReview?.controller.setActiveSession(id);
 
       if (previousActive && previousActive.id !== session.id) {
         this.movePromptContext(previousActive, session);
@@ -644,6 +681,7 @@ export class TaurenSessionManager {
     }
 
     this.activeSessionId = id;
+    this.options.changeReview?.controller.setActiveSession(id);
     this.acknowledgeSessionStatusOnOpen(session);
     session.forceFullStatePost = true;
 
@@ -1410,6 +1448,7 @@ export class TaurenSessionManager {
 
     this.clearInactiveDisposal(session);
     this.sessions.splice(index, 1);
+    void this.options.changeReview?.controller.cancelSession(session.id, 'Inactive session disposed.');
     session.customUiHost?.dispose();
     session.extensionFooterHost.dispose();
     session.extensionWidgetHost.dispose();

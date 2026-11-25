@@ -43,6 +43,8 @@ export interface SandboxLifecycleOptions extends SandboxPathOptions {
   /** Register reverse UI/event handlers before initialize can emit SDK events. */
   configureConnection?: (connection: MessageConnection) => void;
   commandProvider?: (workspace: string, signal?: AbortSignal) => Promise<CommandProviderResult>;
+  /** Initial per-change diff review setting sent during handshake when configured. */
+  perChangeReviewEnabled?: boolean;
   /** Version-specific decoder seam; default deliberately rejects unknown shapes. */
   decodeInspection?: typeof import('./sbxControl').parseSandboxInspection;
   timeouts?: { command?: number; startup?: number; handshake?: number; shutdown?: number; probeInterval?: number };
@@ -226,7 +228,10 @@ export class SandboxLifecycle {
         clientVersion: this.options.clientVersion,
         workspace: paths.workspace,
         sessionDirectory: paths.sessionDirectory,
-        ...(sessionFile ? { sessionFile } : {})
+        ...(sessionFile ? { sessionFile } : {}),
+        ...(this.options.perChangeReviewEnabled !== undefined
+          ? { perChangeReviewEnabled: this.options.perChangeReviewEnabled }
+          : {})
       }), this.options.timeouts?.handshake ?? 30_000, signal, 'Sandbox server handshake');
       const handshake = validateSandboxHandshake(result, {
         ...paths,
