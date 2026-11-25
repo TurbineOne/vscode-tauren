@@ -111,12 +111,12 @@ Implement the feature in small, independently verifiable increments. Keep existi
 - ~~Contribute `tauren.review.accept`, `tauren.review.reject`, `tauren.review.steer`, and `tauren.review.approveSession` commands in `package.json` with `editor/title` menu entries gated on `isInDiffEditor && resourceScheme == tauren-review`. Wire `tauren.review.steer` to `vscode.window.showInputBox`.~~
 - ~~**Test gate:** Extension tests in `src/test/suite/` verify FIFO queueing, Accept/Reject/Steer resolution, manual tab close resolving to `approve`, programmatic abort closing the tab as cancelled/rejected, and cancelling the Steer input box leaving the review pending.~~
 
-### 3. Wire `PiSdkClient` and Tauren chat controller
+### ~~3. Wire `PiSdkClient` and Tauren chat controller~~ — Completed
 
-- Extend `PiClientOptions` in `src/pi/types.ts` with the optional `changeReview` bridge (handler, live enabled getter, and session-abort cancellation wiring).
-- Update `src/sdk/piSdkClient.ts` to pass `createPerChangeReviewExtension(...)` into `createAgentSessionServices({ ..., resourceLoaderOptions: { extensionFactories } })`. Ensure `abort()` and `dispose()` abort any in-flight review signal immediately so the session never hangs waiting on a closed or aborted turn.
-- Update `src/taurenChatViewProvider.ts` and `src/taurenChatController.ts` to instantiate `ChangeReviewController`, connect active-session visibility changes, propagate live setting changes, and emit a one-time warning Toast if `pi-show-diffs` is detected while `tauren.review.perChangeDiffEnabled` is true.
-- **Test gate:** Offline SDK integration tests in `src/test/suite/piSdkIntegration.test.ts` drive real `edit` and `write` tool calls through `PiSdkClient` and verify that Accept writes the file, manual tab close writes the file, Reject leaves the file untouched, Steer blocks the write and delivers the steering message, and `abort()` unblocks a pending review without writing.
+- ~~Extend `PiClientOptions` in `src/pi/types.ts` with the optional `changeReview` bridge (handler, live enabled getter, and session-abort cancellation wiring).~~
+- ~~Update `src/sdk/piSdkClient.ts` to pass `createPerChangeReviewExtension(...)` into `createAgentSessionServices({ ..., resourceLoaderOptions: { extensionFactories } })`. Ensure `abort()` and `dispose()` abort any in-flight review signal immediately so the session never hangs waiting on a closed or aborted turn.~~
+- ~~Update `src/taurenChatViewProvider.ts` and `src/taurenChatController.ts` to instantiate `ChangeReviewController`, connect active-session visibility changes, propagate live setting changes, and emit a one-time warning Toast if `pi-show-diffs` is detected while `tauren.review.perChangeDiffEnabled` is true.~~
+- ~~**Test gate:** Offline SDK integration tests in `src/test/suite/piSdkIntegration.test.ts` drive real `edit` and `write` tool calls through `PiSdkClient` and verify that Accept writes the file, manual tab close writes the file, Reject leaves the file untouched, Steer blocks the write and delivers the steering message, and `abort()` unblocks a pending review without writing.~~
 
 ### 4. Extend SBX protocol, `sandbox-server`, and `SbxClient`
 

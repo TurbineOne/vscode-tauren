@@ -259,7 +259,7 @@ export class ChangeReviewController implements DisposableLike {
       return;
     }
 
-    if (entry.state !== 'open') {
+    if (entry.state !== 'open' && entry.state !== 'opening') {
       return;
     }
 
@@ -359,11 +359,21 @@ export class ChangeReviewController implements DisposableLike {
     void this.settleEntry(entry, { action: 'approve' }, false);
   }
 
+  /**
+   * Resolve which pending review a toolbar command or keybinding targets.
+   * Accepts both `open` and `opening` entries so an action triggered while
+   * `vscode.diff` is still finishing its async open promise settles cleanly
+   * instead of being dropped; `pumpSessionQueue` closes the tab once `openDiff`
+   * resolves if the entry was already settled.
+   */
   private resolveTargetEntry(targetUri?: ChangeReviewUriLike): PendingReviewEntry | undefined {
+    const isActionable = (entry: PendingReviewEntry | undefined): entry is PendingReviewEntry =>
+      Boolean(entry && (entry.state === 'open' || entry.state === 'opening'));
+
     const fromUri = getChangeReviewIdFromUri(targetUri);
     if (fromUri) {
       const entry = this.openById.get(fromUri);
-      if (entry && entry.state === 'open') {
+      if (isActionable(entry)) {
         return entry;
       }
     }
@@ -371,21 +381,21 @@ export class ChangeReviewController implements DisposableLike {
     const fromActiveTab = this.host.getActiveReviewId();
     if (fromActiveTab) {
       const entry = this.openById.get(fromActiveTab);
-      if (entry && entry.state === 'open') {
+      if (isActionable(entry)) {
         return entry;
       }
     }
 
     if (this.activeSessionId) {
       const entry = this.openBySession.get(this.activeSessionId);
-      if (entry && entry.state === 'open') {
+      if (isActionable(entry)) {
         return entry;
       }
     }
 
     if (this.openById.size === 1) {
       const only = this.openById.values().next().value;
-      if (only && only.state === 'open') {
+      if (isActionable(only)) {
         return only;
       }
     }

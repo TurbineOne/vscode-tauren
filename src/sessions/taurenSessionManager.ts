@@ -9,6 +9,7 @@ import type {
   ExtensionPromptKind,
   ExtensionUi
 } from '../extensionUi/types';
+import type { ChangeReviewController } from '../diff/changeReviewController';
 import type { TaurenChatControllerOptions } from '../controller/types';
 import type { ThinkingLevelStepDirection } from '../controller/thinkingLevelSteps';
 import type { KwardMemoryAction } from '../kward/memoryActions';
@@ -33,6 +34,10 @@ export type TaurenSessionManagerOptions = TaurenChatControllerOptions & {
   extensionPrompt?: {
     isAvailable(): boolean;
     postMessage(message: ExtensionPromptHostMessage): boolean;
+  };
+  changeReview?: {
+    controller: ChangeReviewController;
+    isEnabled: () => boolean;
   };
 };
 
@@ -139,6 +144,7 @@ export class TaurenSessionManager {
 
     for (const session of this.sessions.splice(0)) {
       this.clearInactiveDisposal(session);
+      void this.options.changeReview?.controller.cancelSession(session.id, 'Session manager disposed.');
       session.customUiHost?.dispose();
       session.extensionFooterHost.dispose();
       session.extensionWidgetHost.dispose();
@@ -395,6 +401,7 @@ export class TaurenSessionManager {
     for (const session of this.sessions) {
       if (session.id !== this.activeSessionId) {
         this.clearInactiveDisposal(session);
+        void this.options.changeReview?.controller.cancelSession(session.id, 'Session restarted.');
         session.customUiHost?.dispose();
         session.extensionFooterHost.dispose();
         session.extensionWidgetHost.dispose();
@@ -559,10 +566,21 @@ export class TaurenSessionManager {
     const extensionFooterHost = this.createExtensionFooterHost(id, extensionStatuses);
     const extensionWidgetHost = this.createExtensionWidgetHost(id);
     const extensionUi = this.createSessionExtensionUi(id, customUiHost, extensionFooterHost, extensionWidgetHost);
+    const changeReview = this.options.changeReview;
+    const sessionCreateClient: TaurenChatControllerOptions['createClient'] = changeReview
+      ? (clientOptions) => this.options.createClient({
+        ...clientOptions,
+        changeReview: clientOptions.changeReview ?? {
+          isEnabled: () => changeReview.isEnabled(),
+          reviewChange: (request, signal) => changeReview.controller.reviewChange(id, request, signal)
+        }
+      })
+      : this.options.createClient;
     const session: OpenSession = {
       id,
       controller: new TaurenChatController({
         ...this.options,
+        createClient: sessionCreateClient,
         extensionUi,
         getTaurenSettingValues: () => this.getTaurenSettingValues(),
         updateTaurenSetting: (settingId, value) => this.updateTaurenSetting(settingId, value),
@@ -603,6 +621,7 @@ export class TaurenSessionManager {
 
     if (!this.activeSessionId || options.activate) {
       this.activeSessionId = id;
+      this.options.changeReview?.controller.setActiveSession(id);
 
       if (previousActive && previousActive.id !== session.id) {
         this.movePromptContext(previousActive, session);
@@ -644,6 +663,7 @@ export class TaurenSessionManager {
     }
 
     this.activeSessionId = id;
+    this.options.changeReview?.controller.setActiveSession(id);
     this.acknowledgeSessionStatusOnOpen(session);
     session.forceFullStatePost = true;
 
@@ -1410,6 +1430,7 @@ export class TaurenSessionManager {
 
     this.clearInactiveDisposal(session);
     this.sessions.splice(index, 1);
+    void this.options.changeReview?.controller.cancelSession(session.id, 'Inactive session disposed.');
     session.customUiHost?.dispose();
     session.extensionFooterHost.dispose();
     session.extensionWidgetHost.dispose();

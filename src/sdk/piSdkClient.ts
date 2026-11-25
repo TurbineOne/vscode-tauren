@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import type { ExtensionUi } from '../extensionUi/types';
 import type { ComposerCompletionApplication, ComposerCompletionApplied, ComposerCompletionCapabilities, ComposerCompletionRequest, ComposerCompletionResult } from '@tauren/shared/completion/types';
 import { PiAutocompleteRegistry } from '@tauren/shared/completion/piAutocompleteRegistry';
+import { createPerChangeReviewExtension } from '@tauren/shared/review/extension';
 import type { PiClient } from '../pi/clientTypes';
 import type {
   PiAuthActionResult,
@@ -69,6 +70,7 @@ export class PiSdkClient implements PiClient {
   private readonly autocompleteRegistry = new PiAutocompleteRegistry({
     onDiagnostic: (message) => this.emitError(`Pi extension autocomplete: ${message}`)
   });
+  private reviewAbortController = new AbortController();
 
   public constructor(private readonly options: PiSdkClientOptions = {}) {}
 
@@ -93,6 +95,10 @@ export class PiSdkClient implements PiClient {
   }
 
   public async prompt(message: string, streamingBehavior?: PiPromptStreamingBehavior, images?: PiImageContent[]): Promise<void> {
+    if (!this.disposed && this.reviewAbortController.signal.aborted) {
+      this.reviewAbortController = new AbortController();
+    }
+
     const { session } = await this.ensureRuntime();
 
     this.promptSawAgentStart = false;
@@ -138,6 +144,7 @@ export class PiSdkClient implements PiClient {
   }
 
   public async abort(): Promise<void> {
+    this.reviewAbortController.abort();
     const { session } = await this.ensureRuntime();
     session.abortCompaction();
     session.abortBranchSummary();
@@ -700,6 +707,7 @@ export class PiSdkClient implements PiClient {
     }
 
     this.disposed = true;
+    this.reviewAbortController.abort();
     this.autocompleteRegistry.reset();
     const runtime = this.runtime;
     this.unsubscribeSession?.();
@@ -746,10 +754,22 @@ export class PiSdkClient implements PiClient {
         ? initialSettingsManager
         : sdk.SettingsManager.create(runtimeOptions.cwd, runtimeOptions.agentDir);
       this.settingsManager = settingsManager;
+      // `changeReview` is always supplied by `TaurenSessionManager` in normal
+      // sessions, and is undefined in unit tests or standalone callers that omit it.
+      const changeReview = this.options.changeReview;
+      const extensionFactories = changeReview
+        ? [createPerChangeReviewExtension({
+          isEnabled: () => changeReview.isEnabled(),
+          createEditToolDefinition: sdk.createEditToolDefinition,
+          reviewChange: (request, signal) => changeReview.reviewChange(request, signal),
+          getAbortSignal: () => this.reviewAbortController.signal
+        })]
+        : undefined;
       const services = await sdk.createAgentSessionServices({
         cwd: runtimeOptions.cwd,
         agentDir: runtimeOptions.agentDir,
-        settingsManager
+        settingsManager,
+        ...(extensionFactories ? { resourceLoaderOptions: { extensionFactories } } : {})
       });
       const customTools = this.shouldRejectEditWriteOutsideWorkspace()
         ? createWorkspaceMutationGuardTools(sdk, {
