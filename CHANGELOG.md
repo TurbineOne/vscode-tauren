@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-26
+
 - Add multi-session selection and bulk deletion in the Session List Lane. Hovering a session row reveals a checkbox next to its `...` menu button, and checking one or more sessions switches the list header into a bulk action bar with `Select all` (or `Select visible` when search or filters are active), `Clear`, and `Delete` using a single confirmation prompt.
 
 - Refresh the Welcome to Tauren startup resource sections, such as `[Skills]`, whenever a new session or restarted backend finishes loading its startup resources instead of keeping the first session's cached list until an explicit `/reload`.
