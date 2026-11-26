@@ -275,6 +275,10 @@ suite('Chat webview helpers', () => {
       { type: 'deleteSession', sessionPath: '/sessions/old.jsonl' }
     );
     assert.deepStrictEqual(
+      parseWebviewMessage({ type: 'deleteSessions', sessionPaths: ['/sessions/old.jsonl', '/sessions/older.jsonl'] }),
+      { type: 'deleteSessions', sessionPaths: ['/sessions/old.jsonl', '/sessions/older.jsonl'] }
+    );
+    assert.deepStrictEqual(
       parseWebviewMessage({ type: 'sessionItemCommand', sessionPath: '/sessions/old.jsonl', command: 'compact' }),
       { type: 'sessionItemCommand', sessionPath: '/sessions/old.jsonl', command: 'compact' }
     );
@@ -439,6 +443,9 @@ suite('Chat webview helpers', () => {
     assert.deepStrictEqual(parseWebviewMessage({ type: 'searchSessions', requestId: 1, query: 'x', namedOnly: 'yes' }), { type: 'unknown' });
     assert.deepStrictEqual(parseWebviewMessage({ type: 'selectSession', sessionPath: '' }), { type: 'unknown' });
     assert.deepStrictEqual(parseWebviewMessage({ type: 'deleteSession', sessionPath: '' }), { type: 'unknown' });
+    assert.deepStrictEqual(parseWebviewMessage({ type: 'deleteSessions', sessionPaths: [] }), { type: 'unknown' });
+    assert.deepStrictEqual(parseWebviewMessage({ type: 'deleteSessions', sessionPaths: [''] }), { type: 'unknown' });
+    assert.deepStrictEqual(parseWebviewMessage({ type: 'deleteSessions', sessionPaths: 'nope' }), { type: 'unknown' });
     assert.deepStrictEqual(parseWebviewMessage({ type: 'sessionItemCommand', sessionPath: '', command: 'compact' }), { type: 'unknown' });
     assert.deepStrictEqual(parseWebviewMessage({ type: 'sessionItemCommand', sessionPath: '/sessions/old.jsonl', command: 'bogus' }), { type: 'unknown' });
     assert.deepStrictEqual(parseWebviewMessage({ type: 'setSessionItemName', sessionPath: '', name: 'Old work' }), { type: 'unknown' });

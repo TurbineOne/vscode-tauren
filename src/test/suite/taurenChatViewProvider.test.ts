@@ -4,7 +4,11 @@ import * as path from 'node:path';
 import { promises as fs } from 'node:fs';
 import * as vscode from 'vscode';
 import { TaurenChatViewProvider } from '../../taurenChatViewProvider';
-import type { SessionDeletionResult } from '../../controller/types';
+import type {
+  BatchSessionDeletionResult,
+  BatchSessionDeletionTarget,
+  SessionDeletionResult
+} from '../../controller/types';
 import type { AgentClient } from '../../agent/clientTypes';
 import { initialWebviewState, parseWebviewStateMessage } from '../../webview/state';
 import type { WebviewFullStateMessage, WebviewStateMessage } from '../../webviewProtocol/types';
@@ -18,6 +22,7 @@ import type {
 
 type ProviderWithDeleteSession = {
   deleteSession(sessionPath: string, displayName: string): Promise<SessionDeletionResult>;
+  deleteSessions(targets: readonly BatchSessionDeletionTarget[]): Promise<BatchSessionDeletionResult>;
   supportsTrash(): boolean;
   confirmWarningModal(message: string, detail: string, actionLabel: string): Thenable<string | undefined>;
   deleteWorkspaceFile(uri: vscode.Uri, options?: { recursive?: boolean; useTrash?: boolean }): Thenable<void>;
@@ -793,6 +798,108 @@ suite('TaurenChatViewProvider', () => {
       await assert.rejects(
         () => providerWithDelete.deleteSession(sessionFile, 'Missing Session'),
         (error: unknown) => error instanceof vscode.FileSystemError && error.code === 'FileNotFound'
+      );
+    } finally {
+      provider.dispose();
+      await configuration.update('confirmSessionDeletion', previousValue, vscode.ConfigurationTarget.Global);
+    }
+  });
+
+  test('moves multiple sessions to Trash with a single confirmation modal', async () => {
+    const firstFile = path.join(os.tmpdir(), 'tauren-delete-sessions', 'one.jsonl');
+    const secondFile = path.join(os.tmpdir(), 'tauren-delete-sessions', 'two.jsonl');
+    const deleteCalls: { uri: vscode.Uri; options: { recursive?: boolean; useTrash?: boolean } | undefined }[] = [];
+    const prompts: { message: string; detail: string; actionLabel: string }[] = [];
+    const configuration = vscode.workspace.getConfiguration('tauren');
+    const previousValue = configuration.inspect<boolean>('confirmSessionDeletion')?.globalValue;
+    const provider = new TaurenChatViewProvider(vscode.Uri.file('/extension'), () => {
+      throw new Error('Unexpected Pi client creation');
+    });
+    const providerWithDelete = provider as unknown as ProviderWithDeleteSession;
+
+    try {
+      providerWithDelete.supportsTrash = () => true;
+      providerWithDelete.confirmWarningModal = async (message, detail, actionLabel) => {
+        prompts.push({ message, detail, actionLabel });
+        return actionLabel;
+      };
+      providerWithDelete.deleteWorkspaceFile = async (uri, options) => {
+        deleteCalls.push({ uri, options });
+      };
+      await configuration.update('confirmSessionDeletion', true, vscode.ConfigurationTarget.Global);
+
+      const result = await providerWithDelete.deleteSessions([
+        { sessionPath: firstFile, displayName: 'First Session' },
+        { sessionPath: secondFile, displayName: 'Second Session' }
+      ]);
+
+      assert.deepStrictEqual(result, {
+        deletedPaths: [firstFile, secondFile],
+        mode: 'trash'
+      });
+      assert.deepStrictEqual(prompts, [{
+        message: 'Move 2 sessions to Trash?',
+        detail: '• First Session\n• Second Session',
+        actionLabel: 'Move to Trash'
+      }]);
+      assert.strictEqual(deleteCalls.length, 2);
+      assert.deepStrictEqual(deleteCalls.map((call) => call.uri.fsPath), [firstFile, secondFile]);
+      assert.deepStrictEqual(deleteCalls.map((call) => call.options), [{ useTrash: true }, { useTrash: true }]);
+    } finally {
+      provider.dispose();
+      await configuration.update('confirmSessionDeletion', previousValue, vscode.ConfigurationTarget.Global);
+    }
+  });
+
+  test('falls back once to permanent deletion for remaining sessions when Trash is unavailable', async () => {
+    const firstFile = path.join(os.tmpdir(), 'tauren-delete-sessions', 'fallback-1.jsonl');
+    const secondFile = path.join(os.tmpdir(), 'tauren-delete-sessions', 'fallback-2.jsonl');
+    const deleteCalls: { uri: vscode.Uri; options: { recursive?: boolean; useTrash?: boolean } | undefined }[] = [];
+    const prompts: { message: string; detail: string; actionLabel: string }[] = [];
+    const configuration = vscode.workspace.getConfiguration('tauren');
+    const previousValue = configuration.inspect<boolean>('confirmSessionDeletion')?.globalValue;
+    const provider = new TaurenChatViewProvider(vscode.Uri.file('/extension'), () => {
+      throw new Error('Unexpected Pi client creation');
+    });
+    const providerWithDelete = provider as unknown as ProviderWithDeleteSession;
+
+    try {
+      providerWithDelete.supportsTrash = () => true;
+      providerWithDelete.confirmWarningModal = async (message, detail, actionLabel) => {
+        prompts.push({ message, detail, actionLabel });
+        return actionLabel;
+      };
+      providerWithDelete.deleteWorkspaceFile = async (uri, options) => {
+        deleteCalls.push({ uri, options });
+        if (options?.useTrash) {
+          throw new vscode.FileSystemError(
+            `Unable to delete file '${uri.toString()}' via trash because provider does not support it.`
+          );
+        }
+      };
+      await configuration.update('confirmSessionDeletion', false, vscode.ConfigurationTarget.Global);
+
+      const result = await providerWithDelete.deleteSessions([
+        { sessionPath: firstFile, displayName: 'Fallback One' },
+        { sessionPath: secondFile, displayName: 'Fallback Two' }
+      ]);
+
+      assert.deepStrictEqual(result, {
+        deletedPaths: [firstFile, secondFile],
+        mode: 'deleted'
+      });
+      assert.deepStrictEqual(prompts, [{
+        message: 'Unable to move 2 sessions to Trash. Delete permanently instead?',
+        detail: '• Fallback One\n• Fallback Two',
+        actionLabel: 'Delete Permanently'
+      }]);
+      assert.deepStrictEqual(
+        deleteCalls.map((call) => ({ path: call.uri.fsPath, useTrash: call.options?.useTrash })),
+        [
+          { path: firstFile, useTrash: true },
+          { path: firstFile, useTrash: false },
+          { path: secondFile, useTrash: false }
+        ]
       );
     } finally {
       provider.dispose();

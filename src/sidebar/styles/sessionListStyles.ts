@@ -71,6 +71,81 @@ export const sessionListStyles = /* css */ `    .sessions__search {
       font-size: 12px;
     }
 
+    .sessions__header--bulk {
+      position: sticky;
+      top: 0;
+      z-index: var(--tauren-z-raised);
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 4px 8px;
+      padding: 4px;
+      background: var(--vscode-sideBar-background);
+      border-bottom: 1px solid color-mix(in srgb, var(--vscode-foreground) 10%, transparent);
+      box-shadow: 0 -6px 0 var(--vscode-sideBar-background);
+    }
+
+    .sessions__bulk-count {
+      color: var(--vscode-foreground);
+      font-size: 12px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    .sessions__bulk-actions {
+      display: inline-flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .sessions__bulk-button {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      height: 22px;
+      padding: 0 7px;
+      color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+      background: var(--vscode-button-secondaryBackground, color-mix(in srgb, var(--vscode-foreground) 8%, transparent));
+      border: 1px solid var(--vscode-button-border, var(--vscode-input-border, transparent));
+      border-radius: 4px;
+      font: inherit;
+      font-size: 11px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    .sessions__bulk-button:hover:not(:disabled),
+    .sessions__bulk-button:focus-visible {
+      background: var(--vscode-button-secondaryHoverBackground, color-mix(in srgb, var(--vscode-foreground) 14%, transparent));
+      border-color: var(--vscode-focusBorder, var(--vscode-button-border, transparent));
+      outline: none;
+    }
+
+    .sessions__bulk-button:disabled {
+      cursor: default;
+      opacity: 0.45;
+    }
+
+    .sessions__bulk-button--danger {
+      color: var(--vscode-errorForeground, var(--vscode-button-secondaryForeground, var(--vscode-foreground)));
+      background: color-mix(in srgb, var(--vscode-errorForeground, transparent) 10%, var(--vscode-button-secondaryBackground, transparent));
+      border-color: color-mix(in srgb, var(--vscode-errorForeground, transparent) 35%, var(--vscode-button-border, transparent));
+    }
+
+    .sessions__bulk-button--danger:hover:not(:disabled),
+    .sessions__bulk-button--danger:focus-visible {
+      background: color-mix(in srgb, var(--vscode-errorForeground, transparent) 18%, var(--vscode-button-secondaryHoverBackground, transparent));
+      border-color: var(--vscode-errorForeground, var(--vscode-focusBorder));
+    }
+
+    .sessions__bulk-button .tauren-toolbar__menu-icon {
+      width: 12px;
+      height: 12px;
+      flex: 0 0 auto;
+    }
+
     .sessions__error {
       color: var(--vscode-errorForeground);
     }
@@ -91,6 +166,10 @@ export const sessionListStyles = /* css */ `    .sessions__search {
       font-size: 12px;
       text-align: left;
       cursor: pointer;
+    }
+
+    .sessions__item--checked {
+      background: color-mix(in srgb, var(--vscode-list-activeSelectionBackground, var(--vscode-focusBorder)) 42%, transparent);
     }
 
     .sessions--pointer-hover .sessions__item:hover:not(:disabled),
@@ -379,7 +458,7 @@ export const sessionListStyles = /* css */ `    .sessions__search {
       display: inline-flex;
       grid-column: 3;
       grid-row: 1 / 3;
-      gap: 6px;
+      gap: 3px;
       align-items: start;
       justify-content: flex-end;
       justify-self: end;
@@ -421,6 +500,82 @@ export const sessionListStyles = /* css */ `    .sessions__search {
     .sessions__menu-button:disabled {
       cursor: default;
       opacity: 0.35;
+    }
+
+    .sessions__checkbox {
+      position: relative;
+      display: grid;
+      place-items: center;
+      width: 22px;
+      height: 22px;
+      padding: 0;
+      color: inherit;
+      background: transparent;
+      border: 0;
+      border-radius: 4px;
+      cursor: pointer;
+      opacity: 0;
+      pointer-events: none;
+      overflow: visible;
+    }
+
+    .sessions--pointer-hover .sessions__item:hover .sessions__checkbox,
+    .sessions__item--active .sessions__checkbox,
+    .sessions--selection-mode .sessions__checkbox,
+    .sessions__checkbox--checked,
+    .sessions__checkbox:focus-visible {
+      opacity: 0.85;
+      pointer-events: auto;
+    }
+
+    .sessions__checkbox:hover:not(:disabled),
+    .sessions__checkbox:focus-visible,
+    .sessions__checkbox--checked {
+      opacity: 1;
+      outline: none;
+    }
+
+    .sessions--pointer-hover .sessions__item:hover .sessions__checkbox:disabled,
+    .sessions__item--active .sessions__checkbox:disabled,
+    .sessions--selection-mode .sessions__checkbox:disabled {
+      cursor: default;
+      opacity: 0.32;
+    }
+
+    .sessions__checkbox-box {
+      display: grid;
+      place-items: center;
+      width: 14px;
+      height: 14px;
+      background: var(--vscode-checkbox-background, var(--vscode-input-background, transparent));
+      border: 1px solid var(--vscode-checkbox-border, var(--vscode-input-border, color-mix(in srgb, currentColor 45%, transparent)));
+      border-radius: 3px;
+    }
+
+    .sessions__checkbox:hover:not(:disabled) .sessions__checkbox-box,
+    .sessions__checkbox:focus-visible .sessions__checkbox-box {
+      border-color: var(--vscode-focusBorder, var(--vscode-checkbox-border, currentColor));
+    }
+
+    .sessions__checkbox--checked .sessions__checkbox-box {
+      color: var(--vscode-checkbox-foreground, var(--vscode-button-foreground, var(--vscode-foreground)));
+      background: var(--vscode-checkbox-selectBackground, var(--vscode-button-background, var(--vscode-focusBorder)));
+      border-color: var(--vscode-checkbox-selectBorder, var(--vscode-button-background, var(--vscode-focusBorder)));
+    }
+
+    .sessions__checkbox-icon {
+      opacity: 0;
+      transform: scale(0.85);
+      transition: opacity 90ms ease, transform 90ms ease;
+    }
+
+    .sessions__checkbox--checked .sessions__checkbox-icon {
+      opacity: 1;
+      transform: scale(1);
+    }
+
+    .tauren-animations-disabled .sessions__checkbox-icon {
+      transition: none;
     }
 
     .sessions__menu {

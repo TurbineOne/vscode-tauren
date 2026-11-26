@@ -7,7 +7,11 @@ import type {
   WebviewSessionSearchState,
   WebviewTreeItem
 } from '../webviewProtocol/types';
-import type { TaurenChatControllerOptions } from '../controller/types';
+import type {
+  BatchSessionDeletionResult,
+  BatchSessionDeletionTarget,
+  TaurenChatControllerOptions
+} from '../controller/types';
 import type { AgentClient } from '../agent/clientTypes';
 import { getErrorMessage } from '../controller/errors';
 import {
@@ -44,6 +48,7 @@ type SessionViewControllerOptions = Pick<
   TaurenChatControllerOptions,
   | 'createClient'
   | 'deleteSession'
+  | 'deleteSessions'
   | 'extensionUi'
   | 'getCwd'
   | 'listSessions'
@@ -430,6 +435,183 @@ export class SessionViewController {
 
   public async deleteSession(sessionPath: string): Promise<void> {
     await this.deleteSessionPath(sessionPath, { removeFallbackOnly: true });
+  }
+
+  public async deleteSessions(sessionPaths: readonly string[]): Promise<void> {
+    const entries = this.resolveBatchDeletionEntries(sessionPaths);
+
+    if (entries.length === 0) {
+      return;
+    }
+
+    if (entries.length === 1) {
+      await this.deleteSession(entries[0].trimmedPath);
+      return;
+    }
+
+    if (entries.some((entry) => entry.session?.liveStatus === 'running' || (entry.isCurrentSession && this.options.isBusy()))) {
+      this.options.showNotification('Wait for the session to finish before deleting it.', 'warning');
+      return;
+    }
+
+    const persistedTargets: BatchSessionDeletionTarget[] = entries
+      .filter((entry) => !entry.isFallbackOnly)
+      .map((entry) => ({
+        sessionPath: entry.trimmedPath,
+        displayName: getSessionDisplayName(entry.session, entry.trimmedPath)
+      }));
+
+    if (persistedTargets.length > 0 && !this.options.deleteSessions && !this.options.deleteSession) {
+      this.options.showNotification('Session deletion is not available in this environment.', 'warning');
+      return;
+    }
+
+    this.sessionsError = '';
+    this.sessionsRefreshing = true;
+    this.options.postState();
+
+    try {
+      const batchResult = persistedTargets.length > 0
+        ? await this.runBatchSessionDeletion(persistedTargets)
+        : { deletedPaths: [] as string[], mode: 'trash' as const };
+
+      await this.applyBatchDeletionOutcome(entries, persistedTargets.length, batchResult);
+    } catch (error) {
+      this.sessionsError = getErrorMessage(error);
+      this.options.postState();
+    } finally {
+      this.sessionsRefreshing = false;
+      if (this.options.navigation.lane === 'sessions') {
+        this.options.postState();
+      }
+    }
+  }
+
+  private resolveBatchDeletionEntries(sessionPaths: readonly string[]): Array<{
+    trimmedPath: string;
+    normalizedPath: string;
+    session: WebviewSessionItem | undefined;
+    isCurrentSession: boolean;
+    isFallbackOnly: boolean;
+  }> {
+    const entries: Array<{
+      trimmedPath: string;
+      normalizedPath: string;
+      session: WebviewSessionItem | undefined;
+      isCurrentSession: boolean;
+      isFallbackOnly: boolean;
+    }> = [];
+    const seenPaths = new Set<string>();
+
+    for (const rawPath of sessionPaths) {
+      const trimmedPath = rawPath.trim();
+      const normalizedPath = normalizeSessionPath(trimmedPath);
+
+      if (!trimmedPath || !normalizedPath || seenPaths.has(normalizedPath)) {
+        continue;
+      }
+
+      seenPaths.add(normalizedPath);
+      const session = this.sessions.find((entry) => normalizeSessionPath(entry.path) === normalizedPath);
+      const isCurrentSession = Boolean(session?.current) || normalizeSessionPath(this.sessionFile) === normalizedPath;
+      const isFallbackOnly = this.fallbackSessionPaths.has(normalizedPath);
+      entries.push({ trimmedPath, normalizedPath, session, isCurrentSession, isFallbackOnly });
+    }
+
+    return entries;
+  }
+
+  private async applyBatchDeletionOutcome(
+    entries: ReadonlyArray<{
+      normalizedPath: string;
+      isCurrentSession: boolean;
+      isFallbackOnly: boolean;
+    }>,
+    persistedTargetCount: number,
+    batchResult: BatchSessionDeletionResult
+  ): Promise<void> {
+    if (persistedTargetCount > 0 && batchResult.deletedPaths.length === 0 && !batchResult.error) {
+      return;
+    }
+
+    const deletedNormalizedPaths = new Set(batchResult.deletedPaths.map((path) => normalizeSessionPath(path)));
+
+    for (const entry of entries) {
+      if (entry.isFallbackOnly) {
+        this.fallbackSessionPaths.delete(entry.normalizedPath);
+        deletedNormalizedPaths.add(entry.normalizedPath);
+      }
+    }
+
+    if (deletedNormalizedPaths.size === 0) {
+      if (batchResult.error) {
+        this.sessionsError = batchResult.error;
+        this.options.postState();
+      }
+      return;
+    }
+
+    this.sessions = this.sessions.filter((entry) => !deletedNormalizedPaths.has(normalizeSessionPath(entry.path)));
+    this.sessionSearchIndex.setSessions(this.sessions);
+    this.refreshSessionSearchState({ post: false });
+
+    if (batchResult.deletedPaths.length > 0) {
+      this.options.showToast?.(formatDeletedSessionsToast(batchResult.deletedPaths.length, batchResult.mode));
+    }
+
+    const deletedCurrentSession = entries.some(
+      (entry) => entry.isCurrentSession && deletedNormalizedPaths.has(entry.normalizedPath)
+    );
+
+    if (deletedCurrentSession) {
+      this.sessionsRefreshing = false;
+      this.options.startNewSession({ lane: 'sessions' });
+
+      if (this.sessions.length > 0) {
+        await this.refreshSessions();
+      }
+    } else {
+      await this.refreshSessions();
+    }
+
+    if (batchResult.error) {
+      this.sessionsError = batchResult.error;
+      this.options.postState();
+    }
+  }
+
+  private async runBatchSessionDeletion(targets: readonly BatchSessionDeletionTarget[]): Promise<BatchSessionDeletionResult> {
+    if (this.options.deleteSessions) {
+      return await this.options.deleteSessions(targets);
+    }
+
+    const deleteSingle = this.options.deleteSession;
+
+    if (!deleteSingle) {
+      return { deletedPaths: [], mode: 'trash' };
+    }
+
+    const deletedPaths: string[] = [];
+    let usedPermanentDelete = false;
+
+    for (const target of targets) {
+      const deleted = await deleteSingle(target.sessionPath, target.displayName);
+
+      if (!deleted) {
+        break;
+      }
+
+      if (deleted === 'deleted') {
+        usedPermanentDelete = true;
+      }
+
+      deletedPaths.push(target.sessionPath);
+    }
+
+    return {
+      deletedPaths,
+      mode: usedPermanentDelete ? 'deleted' : 'trash'
+    };
   }
 
   public async deleteCurrentSession(): Promise<void> {
@@ -970,6 +1152,14 @@ export class SessionViewController {
 function omitTreeItemLabel(item: WebviewTreeItem): WebviewTreeItem {
   const { label: _label, ...rest } = item;
   return rest;
+}
+
+function formatDeletedSessionsToast(count: number, mode: 'trash' | 'deleted'): string {
+  if (count === 1) {
+    return mode === 'deleted' ? 'Session deleted.' : 'Session moved to Trash.';
+  }
+
+  return mode === 'deleted' ? `${count} sessions deleted.` : `${count} sessions moved to Trash.`;
 }
 
 async function defaultListSessions(): Promise<WebviewSessionItem[]> {

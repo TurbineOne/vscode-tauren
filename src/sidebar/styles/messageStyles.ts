@@ -371,6 +371,7 @@ export const messageStyles = /* css */ `    .tauren-transcript-search {
     .tauren-toolbar__sessions .tauren-icon-action-tooltip,
     .tauren-toolbar__tree .tauren-icon-action-tooltip,
     .sessions__menu-button .tauren-icon-action-tooltip,
+    .sessions__checkbox .tauren-icon-action-tooltip,
     .sessions__named-filter .tauren-icon-action-tooltip {
       top: calc(100% + 5px);
       right: 0;
@@ -405,6 +406,8 @@ export const messageStyles = /* css */ `    .tauren-transcript-search {
     .composer__model[aria-expanded="false"]:focus-visible .tauren-icon-action-tooltip,
     .sessions__menu-button[aria-expanded="false"]:hover .tauren-icon-action-tooltip,
     .sessions__menu-button[aria-expanded="false"]:focus-visible .tauren-icon-action-tooltip,
+    .sessions__checkbox:hover:not(:disabled) .tauren-icon-action-tooltip,
+    .sessions__checkbox:focus-visible:not(:disabled) .tauren-icon-action-tooltip,
     .sessions__named-filter:hover .tauren-icon-action-tooltip,
     .sessions__named-filter:focus-visible .tauren-icon-action-tooltip {
       display: block;

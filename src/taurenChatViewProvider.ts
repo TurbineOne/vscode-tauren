@@ -7,7 +7,13 @@ import {
   parseWebviewMessage
 } from './sidebar/chatWebview';
 import type { SettingValue, TaurenSettingId } from './settings/settingsRegistry';
-import type { SessionDeletionResult, SessionListProgressOptions } from './controller/types';
+import type {
+  BatchSessionDeletionResult,
+  BatchSessionDeletionTarget,
+  SessionDeletionResult,
+  SessionListProgressOptions
+} from './controller/types';
+import { getErrorMessage } from './controller/errors';
 import type { WebviewLane, WebviewMessage, WebviewPerfEvent, WebviewScrollCommand, WebviewSessionItem, WebviewStartupResourceSection, WebviewStateMessage } from './webviewProtocol/types';
 import { type AgentClientFactory, type AgentClient } from './agent/clientTypes';
 import type { AgentClientOptions } from './agent/types';
@@ -164,6 +170,18 @@ function isNonTrashDeleteError(error: unknown): boolean {
   return false;
 }
 
+function formatBatchSessionDeletionDetail(targets: readonly BatchSessionDeletionTarget[]): string {
+  const maxPreviewCount = 10;
+  const lines = targets.slice(0, maxPreviewCount).map((target) => `• ${target.displayName}`);
+  const remaining = targets.length - lines.length;
+
+  if (remaining > 0) {
+    lines.push(`…and ${remaining} more`);
+  }
+
+  return lines.join('\n');
+}
+
 function getQuietStartupFromStateMessage(message: WebviewStateMessage): boolean | undefined {
   const value = message.settings?.values.quietStartup;
   return typeof value === 'boolean' ? value : undefined;
@@ -285,7 +303,10 @@ export class TaurenChatViewProvider implements vscode.WebviewViewProvider, vscod
       },
       postState: (message) => {
         this.setBusyContext(message.busy);
-        if (message.startupResources) {
+        if (message.startupResourcesLoaded) {
+          this.lastStartupResources = message.startupResources ?? [];
+          this.maybeWarnPiShowDiffsOverlap();
+        } else if (message.startupResources) {
           this.lastStartupResources = message.startupResources;
           this.maybeWarnPiShowDiffsOverlap();
         }
@@ -324,6 +345,7 @@ export class TaurenChatViewProvider implements vscode.WebviewViewProvider, vscod
       saveSessionDiffSnapshot: (sessionFile, snapshot) => writeSessionDiffSnapshot(this.workspaceState, sessionFile, snapshot),
       listSessions: (cwd, currentSessionFile, options) => this.listSessionsWithPerf(cwd, currentSessionFile, options),
       deleteSession: (sessionPath, displayName) => this.deleteSession(sessionPath, displayName),
+      deleteSessions: (targets) => this.deleteSessions(targets),
       showSessionChanges: (sessionPath, displayName) => this.sessionDiffViewer.showSessionChanges(
         sessionPath,
         displayName,
@@ -1625,6 +1647,202 @@ export class TaurenChatViewProvider implements vscode.WebviewViewProvider, vscod
     } finally {
       client.dispose();
     }
+  }
+
+  private async deleteSessions(targets: readonly BatchSessionDeletionTarget[]): Promise<BatchSessionDeletionResult> {
+    if (targets.length === 0) {
+      return { deletedPaths: [], mode: 'trash' };
+    }
+
+    if (targets.length === 1) {
+      const deleted = await this.deleteSession(targets[0].sessionPath, targets[0].displayName);
+      return deleted
+        ? { deletedPaths: [targets[0].sessionPath], mode: deleted === 'deleted' ? 'deleted' : 'trash' }
+        : { deletedPaths: [], mode: 'trash' };
+    }
+
+    if (getBackendSetting() === 'kward') {
+      return this.deleteKwardSessions(targets);
+    }
+
+    const useTrash = this.supportsTrash();
+
+    if (!(await this.confirmBatchSessionDeletion(targets, useTrash))) {
+      return { deletedPaths: [], mode: useTrash ? 'trash' : 'deleted' };
+    }
+
+    if (getBackendSetting() === 'sbx') {
+      await this.validateSbxSessionDeletionTargets(targets);
+    }
+
+    return this.deleteSessionFilesBatch(targets, useTrash);
+  }
+
+  private async confirmBatchSessionDeletion(
+    targets: readonly BatchSessionDeletionTarget[],
+    useTrash: boolean
+  ): Promise<boolean> {
+    if (!getConfirmSessionDeletionSetting()) {
+      return true;
+    }
+
+    const actionLabel = useTrash ? 'Move to Trash' : 'Delete Permanently';
+    const promptMessage = useTrash
+      ? `Move ${targets.length} sessions to Trash?`
+      : `Delete ${targets.length} sessions permanently?`;
+    const selected = await this.confirmWarningModal(
+      promptMessage,
+      formatBatchSessionDeletionDetail(targets),
+      actionLabel
+    );
+    return selected === actionLabel;
+  }
+
+  private async validateSbxSessionDeletionTargets(targets: readonly BatchSessionDeletionTarget[]): Promise<void> {
+    const scope = await resolveSbxWorkspace(
+      this.workspaceCwdProvider(),
+      this.extensionUri.fsPath,
+      (message) => this.writeSandboxDiagnostic(message)
+    );
+    const discovery = await discoverSbxSessionFiles(
+      { sbxSessionStore: scope.sessionDirectory, sbxWorkspace: scope.workspace },
+      targets.map((target) => target.sessionPath)
+    );
+
+    for (const target of targets) {
+      let associated = false;
+      for await (const _record of discovery.readRecords(target.sessionPath)) {
+        associated = true;
+        break;
+      }
+      if (!associated) {
+        throw new Error('Only sessions associated with this Docker Sandboxes workspace can be deleted.');
+      }
+    }
+  }
+
+  private async deleteSessionFilesBatch(
+    targets: readonly BatchSessionDeletionTarget[],
+    initialUseTrash: boolean
+  ): Promise<BatchSessionDeletionResult> {
+    let useTrash = initialUseTrash;
+    let usedPermanentDelete = !useTrash;
+    let firstError: string | undefined;
+    const deletedPaths: string[] = [];
+
+    for (let index = 0; index < targets.length; index += 1) {
+      const target = targets[index];
+      const uri = vscode.Uri.file(target.sessionPath);
+
+      try {
+        await this.deleteWorkspaceFile(uri, { useTrash });
+        deletedPaths.push(target.sessionPath);
+        if (!useTrash) {
+          usedPermanentDelete = true;
+        }
+      } catch (error) {
+        if (!useTrash || isNonTrashDeleteError(error)) {
+          firstError ??= getErrorMessage(error);
+          continue;
+        }
+
+        if (!(await this.confirmBatchPermanentDeleteFallback(targets.slice(index)))) {
+          break;
+        }
+
+        useTrash = false;
+        usedPermanentDelete = true;
+
+        try {
+          await this.deleteWorkspaceFile(uri, { useTrash: false });
+          deletedPaths.push(target.sessionPath);
+        } catch (deleteError) {
+          firstError ??= getErrorMessage(deleteError);
+        }
+      }
+    }
+
+    if (deletedPaths.length === 0 && firstError) {
+      throw new Error(firstError);
+    }
+
+    return {
+      deletedPaths,
+      mode: usedPermanentDelete ? 'deleted' : 'trash',
+      ...(firstError ? { error: firstError } : {})
+    };
+  }
+
+  private async confirmBatchPermanentDeleteFallback(
+    remaining: readonly BatchSessionDeletionTarget[]
+  ): Promise<boolean> {
+    const deletePermanently = 'Delete Permanently';
+    const message = remaining.length === 1
+      ? `Unable to move "${remaining[0].displayName}" to Trash. Delete permanently instead?`
+      : `Unable to move ${remaining.length} sessions to Trash. Delete permanently instead?`;
+    const detail = remaining.length === 1
+      ? remaining[0].sessionPath
+      : formatBatchSessionDeletionDetail(remaining);
+    const selected = await this.confirmWarningModal(message, detail, deletePermanently);
+    return selected === deletePermanently;
+  }
+
+  private async deleteKwardSessions(targets: readonly BatchSessionDeletionTarget[]): Promise<BatchSessionDeletionResult> {
+    if (getConfirmSessionDeletionSetting()) {
+      const deleteSessionsLabel = 'Delete Sessions';
+      const selected = await this.confirmWarningModal(
+        `Delete ${targets.length} sessions?`,
+        formatBatchSessionDeletionDetail(targets),
+        deleteSessionsLabel
+      );
+
+      if (selected !== deleteSessionsLabel) {
+        return { deletedPaths: [], mode: 'deleted' };
+      }
+    }
+
+    const client = createConfiguredAgentClient({ cwd: this.workspaceCwdProvider(), sessionFile: targets[0].sessionPath }, {
+      extensionUi: {
+        notify: (message, notifyType) => this.showNotification(message, notifyType),
+        select: (title, options) => vscode.window.showQuickPick(options, { title, placeHolder: title }),
+        confirm: (title, message) => this.showConfirmation(title, message),
+        input: (title, placeholder) => vscode.window.showInputBox({ title, placeHolder: placeholder })
+      },
+      showNotification: (message, notifyType) => this.showNotification(message, notifyType),
+      getRejectEditWriteOutsideWorkspace: () => getRejectEditWriteOutsideWorkspaceSetting(),
+      onExtensionLoadError: (path, error) => this.writeExtensionLoadError(path, error)
+    });
+
+    const deletedPaths: string[] = [];
+    let firstError: string | undefined;
+
+    try {
+      if (!client.deleteSession) {
+        throw new Error('Kward backend does not support session deletion yet.');
+      }
+
+      for (const target of targets) {
+        try {
+          if (await client.deleteSession(target.sessionPath)) {
+            deletedPaths.push(target.sessionPath);
+          }
+        } catch (error) {
+          firstError ??= getErrorMessage(error);
+        }
+      }
+    } finally {
+      client.dispose();
+    }
+
+    if (deletedPaths.length === 0 && firstError) {
+      throw new Error(firstError);
+    }
+
+    return {
+      deletedPaths,
+      mode: 'deleted',
+      ...(firstError ? { error: firstError } : {})
+    };
   }
 
   private postInputFocus(): void {

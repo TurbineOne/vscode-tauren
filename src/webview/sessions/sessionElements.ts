@@ -30,6 +30,8 @@ export type CreateSessionItemElementOptions = {
   session: SessionItem;
   index: number;
   selectedIndex: number;
+  checked?: boolean;
+  canCheckSession?: (session: SessionItem) => boolean;
   nameEditPath: string | undefined;
   nameEditValue: string;
   openMenuIndex: number | undefined;
@@ -43,10 +45,12 @@ export type CreateSessionItemElementOptions = {
 
 export function createSessionItemElement(options: CreateSessionItemElementOptions): HTMLElement {
   const { session, index } = options;
+  const checked = Boolean(options.checked);
   const item = document.createElement('div');
   item.id = 'session-' + index;
   item.className = 'sessions__item'
     + (index === options.selectedIndex ? ' sessions__item--active' : '')
+    + (checked ? ' sessions__item--checked' : '')
     + (session.current ? ' sessions__item--current' : '')
     + (session.metadataState === 'loading' ? ' sessions__item--loading' : '')
     + (session.liveStatus ? ' sessions__item--' + session.liveStatus : '');
@@ -264,6 +268,8 @@ function createSessionItemMenuElement(options: CreateSessionItemElementOptions):
   button.innerHTML = '<svg aria-hidden="true" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M5 8C5 8.55229 4.55228 9 4 9C3.44772 9 3 8.55229 3 8C3 7.44772 3.44772 7 4 7C4.55228 7 5 7.44772 5 8ZM9 8C9 8.55229 8.55229 9 8 9C7.44772 9 7 8.55229 7 8C7 7.44772 7.44772 7 8 7C8.55229 7 9 7.44772 9 8ZM12 9C12.5523 9 13 8.55229 13 8C13 7.44772 12.5523 7 12 7C11.4477 7 11 7.44772 11 8C11 8.55229 11.4477 9 12 9Z"/></svg><span class="tauren-icon-action-tooltip">Session commands</span>';
   wrap.append(button);
 
+  wrap.append(createSessionItemCheckboxElement(options));
+
   if (options.openMenuIndex !== options.index) {
     return wrap;
   }
@@ -286,6 +292,29 @@ function createSessionItemMenuElement(options: CreateSessionItemElementOptions):
 
   wrap.append(menu);
   return wrap;
+}
+
+function createSessionItemCheckboxElement(options: CreateSessionItemElementOptions): HTMLButtonElement {
+  const checked = Boolean(options.checked);
+  const canCheck = options.canCheckSession
+    ? options.canCheckSession(options.session)
+    : options.canRunSessionItemCommand(options.session, 'delete');
+  const actionLabel = checked ? 'Deselect session' : 'Select session';
+  const checkbox = document.createElement('button');
+  checkbox.type = 'button';
+  checkbox.className = 'sessions__checkbox' + (checked ? ' sessions__checkbox--checked' : '');
+  checkbox.setAttribute('role', 'checkbox');
+  checkbox.setAttribute('aria-checked', checked ? 'true' : 'false');
+  checkbox.setAttribute('aria-label', `${actionLabel}: ${getSessionDisplayName(options.session)}`);
+  checkbox.disabled = !canCheck;
+  checkbox.innerHTML =
+    '<span class="sessions__checkbox-box" aria-hidden="true">'
+    + '<svg class="sessions__checkbox-icon" width="11" height="11" viewBox="0 0 12 12" fill="none">'
+    + '<path d="M2.5 6.2L4.9 8.6L9.6 3.6" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"/>'
+    + '</svg>'
+    + '</span>'
+    + `<span class="tauren-icon-action-tooltip">${actionLabel}</span>`;
+  return checkbox;
 }
 
 function createSessionIndicatorsElement(session: SessionItem): HTMLElement | undefined {

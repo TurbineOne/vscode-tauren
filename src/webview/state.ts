@@ -36,6 +36,7 @@ export const initialWebviewState: WebviewState = {
   extensionFooter: undefined,
   extensionWidgets: [],
   startupResources: [],
+  startupResourcesLoaded: false,
   startupResourcesReloadRevision: 0,
   allowRemoteImages: false,
   welcomeDismissed: false,
@@ -78,36 +79,34 @@ export function createStartupResourcesCache(): StartupResourcesCache {
   };
 }
 
+/**
+ * Keeps the previous startup resource sections visible as a placeholder while a
+ * new session is still connecting, and replaces the cache as soon as the active
+ * session finishes loading its own startup resources or completes a reload.
+ */
 export function applyStartupResourcesCache(
   nextState: WebviewState,
   cache: StartupResourcesCache
 ): { state: WebviewState; cache: StartupResourcesCache } {
-  let nextCache = cache;
-
-  if (nextState.startupResourcesReloadRevision > cache.reloadRevision) {
-    nextCache = {
+  if (nextState.startupResourcesLoaded || nextState.startupResourcesReloadRevision > cache.reloadRevision) {
+    const nextCache: StartupResourcesCache = {
       initialized: true,
       reloadRevision: nextState.startupResourcesReloadRevision,
       resources: cloneStartupResources(nextState.startupResources)
     };
-  } else if (!cache.initialized && nextState.startupResources.length > 0) {
-    nextCache = {
-      initialized: true,
-      reloadRevision: nextState.startupResourcesReloadRevision,
-      resources: cloneStartupResources(nextState.startupResources)
-    };
+    return { state: nextState, cache: nextCache };
   }
 
-  if (!nextCache.initialized || areStartupResourcesEqual(nextState.startupResources, nextCache.resources)) {
-    return { state: nextState, cache: nextCache };
+  if (!cache.initialized || areStartupResourcesEqual(nextState.startupResources, cache.resources)) {
+    return { state: nextState, cache };
   }
 
   return {
     state: {
       ...nextState,
-      startupResources: cloneStartupResources(nextCache.resources)
+      startupResources: cloneStartupResources(cache.resources)
     },
-    cache: nextCache
+    cache
   };
 }
 
@@ -120,6 +119,7 @@ export function createOptimisticNewSessionState(previousState: WebviewState): We
     contextUsageTitle: '',
     contextUsageLevel: '',
     workspaceDiffStats: { addedLines: 0, removedLines: 0 },
+    startupResourcesLoaded: false,
     composerPaste: undefined,
     lane: 'chat',
     chatFace: 'main',
@@ -195,6 +195,10 @@ function shouldReserveExtensionFooter(state: WebviewState): boolean {
 
 export function parseWebviewStateMessage(data: unknown, previousState?: WebviewState): WebviewState {
   const record = isRecord(data) ? data : {};
+  const startupResources = parseStartupResources(record.startupResources);
+  const startupResourcesLoaded = typeof record.startupResourcesLoaded === 'boolean'
+    ? record.startupResourcesLoaded
+    : startupResources.length > 0;
 
   return {
     messages: parseMessages(record, previousState?.messages ?? []),
@@ -218,8 +222,9 @@ export function parseWebviewStateMessage(data: unknown, previousState?: WebviewS
     extensionStatus: parseExtensionStatus(record.extensionStatus),
     extensionFooter: parseExtensionFooter(record.extensionFooter),
     extensionWidgets: parseExtensionWidgets(record.extensionWidgets),
-    startupResources: parseStartupResources(record.startupResources),
-    startupResourcesReloadRevision: parseNonNegativeInteger(record.startupResourcesReloadRevision, previousState?.startupResourcesReloadRevision ?? 0),
+    startupResources,
+    startupResourcesLoaded,
+    startupResourcesReloadRevision: parseNonNegativeInteger(record.startupResourcesReloadRevision, 0),
     allowRemoteImages: typeof record.allowRemoteImages === 'boolean' ? record.allowRemoteImages : false,
     welcomeDismissed: Boolean(record.welcomeDismissed),
     promptContext: Array.isArray(record.promptContext) ? record.promptContext : [],
