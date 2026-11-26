@@ -371,6 +371,7 @@ export class SessionMetadataState {
   private slashCommands: WebviewSlashCommand[] = [];
   private slashCommandsRefreshing = false;
   private startupResources: WebviewStartupResourceSection[] = [];
+  private startupResourcesLoaded = false;
   private piSettings: PiRuntimeSettingsMeta = {};
   private activePersonaLabel = '';
 
@@ -399,6 +400,7 @@ export class SessionMetadataState {
       slashCommands: this.slashCommands,
       slashCommandsRefreshing: this.slashCommandsRefreshing,
       startupResources: cloneStartupResources(this.startupResources),
+      startupResourcesLoaded: this.startupResourcesLoaded,
       piSettings: { ...this.piSettings },
       activePersonaLabel: this.activePersonaLabel
     };
@@ -442,7 +444,7 @@ export class SessionMetadataState {
   }
 
   public applyStartupResources(resources: AgentStartupResources | undefined): boolean {
-    return this.setStartupResources(formatStartupResources(resources));
+    return this.setStartupResources(formatStartupResources(resources), true);
   }
 
   public resetContextUsage(): void {
@@ -457,7 +459,12 @@ export class SessionMetadataState {
   }
 
   public resetStartupResources(): void {
-    this.setStartupResources([]);
+    this.setStartupResources([], false);
+  }
+
+  public resetSlashCommands(): void {
+    this.slashCommands = [];
+    this.slashCommandsRefreshing = false;
   }
 
   public setMetadataRefreshing(value: boolean): void {
@@ -564,11 +571,12 @@ export class SessionMetadataState {
     return true;
   }
 
-  private setStartupResources(startupResources: WebviewStartupResourceSection[]): boolean {
-    if (areStartupResourcesEqual(startupResources, this.startupResources)) {
+  private setStartupResources(startupResources: WebviewStartupResourceSection[], loaded: boolean): boolean {
+    if (this.startupResourcesLoaded === loaded && areStartupResourcesEqual(startupResources, this.startupResources)) {
       return false;
     }
 
+    this.startupResourcesLoaded = loaded;
     this.startupResources = cloneStartupResources(startupResources);
     return true;
   }

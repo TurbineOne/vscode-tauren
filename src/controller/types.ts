@@ -13,6 +13,17 @@ import type { VoiceController } from '../voice/voiceController';
 
 export type SessionDeletionResult = boolean | 'deleted';
 
+export type BatchSessionDeletionTarget = {
+  sessionPath: string;
+  displayName: string;
+};
+
+export type BatchSessionDeletionResult = {
+  deletedPaths: string[];
+  mode: 'trash' | 'deleted';
+  error?: string;
+};
+
 export type SessionListProgressOptions = {
   onProgress?: (sessions: WebviewSessionItem[]) => void;
   previousSessions?: readonly WebviewSessionItem[];
@@ -53,6 +64,7 @@ export type TaurenChatControllerOptions = {
     options?: SessionListProgressOptions
   ) => Promise<WebviewSessionItem[]>;
   deleteSession?: (sessionPath: string, displayName: string) => Promise<SessionDeletionResult>;
+  deleteSessions?: (targets: readonly BatchSessionDeletionTarget[]) => Promise<BatchSessionDeletionResult>;
   renameOpenSession?: (sessionPath: string, name: string) => Promise<boolean>;
   reloadOpenSessions?: () => Promise<number>;
   restartOpenSessions?: () => Promise<number>;

@@ -131,6 +131,12 @@ export function parseWebviewMessage(value: unknown): WebviewMessage {
       return typeof value.sessionPath === 'string' && value.sessionPath
         ? { type: 'deleteSession', sessionPath: value.sessionPath }
         : { type: 'unknown' };
+    case 'deleteSessions': {
+      const sessionPaths = parseStringArray(value.sessionPaths);
+      return sessionPaths && sessionPaths.length > 0
+        ? { type: 'deleteSessions', sessionPaths }
+        : { type: 'unknown' };
+    }
     case 'sessionItemCommand': {
       const command = parseWebviewSessionItemCommand(value.command);
       return typeof value.sessionPath === 'string' && value.sessionPath && command
@@ -384,6 +390,7 @@ export function createWebviewStateMessage({
   extensionFooter,
   extensionWidgets = [],
   startupResources = [],
+  startupResourcesLoaded = false,
   startupResourcesReloadRevision = 0,
   allowRemoteImages = false,
   welcomeDismissed,
@@ -436,6 +443,10 @@ export function createWebviewStateMessage({
 
   if (startupResources.length > 0) {
     message.startupResources = cloneWebviewStartupResources(startupResources);
+  }
+
+  if (startupResourcesLoaded) {
+    message.startupResourcesLoaded = true;
   }
 
   if (startupResourcesReloadRevision > 0) {
@@ -614,14 +625,15 @@ ${chatWebviewStyles}
             <tbody>
               <tr><td><kbd>Home</kbd> / <kbd>End</kbd></td><td>Move to first or last visible session</td></tr>
               <tr><td><kbd>Enter</kbd></td><td>Open selected session</td></tr>
+              <tr><td><kbd>Space</kbd></td><td>Toggle session selection</td></tr>
               <tr><td><kbd>?</kbd></td><td>Show this help</td></tr>
               <tr><td><kbd>R</kbd></td><td>Rename</td></tr>
               <tr><td><kbd>F</kbd></td><td>Fork</td></tr>
               <tr><td><kbd>C</kbd></td><td>Clone</td></tr>
               <tr><td><kbd>Z</kbd></td><td>Compact</td></tr>
               <tr><td><kbd>E</kbd></td><td>Export as HTML</td></tr>
-              <tr><td><kbd>Del</kbd> / <kbd>Backspace</kbd></td><td>Move to trash</td></tr>
-              <tr><td><kbd>Esc</kbd></td><td>Back to chat</td></tr>
+              <tr><td><kbd>Del</kbd> / <kbd>Backspace</kbd></td><td>Move selected to trash</td></tr>
+              <tr><td><kbd>Esc</kbd></td><td>Clear selection, or back to chat</td></tr>
             </tbody>
           </table>
         </section>

@@ -94,6 +94,12 @@ suite('SessionMetadataState', () => {
   test('applies startup resources for webview state only', () => {
     const state = new SessionMetadataState();
 
+    assert.strictEqual(state.getWebviewState().startupResourcesLoaded, false);
+    assert.strictEqual(state.applyStartupResources({ sections: [] }), true);
+    assert.strictEqual(state.getWebviewState().startupResourcesLoaded, true);
+    assert.deepStrictEqual(state.getWebviewState().startupResources, []);
+    assert.strictEqual(state.applyStartupResources({ sections: [] }), false);
+
     assert.strictEqual(state.applyStartupResources({
       sections: [
         { name: 'Context', items: ['AGENTS.md'] },
@@ -105,10 +111,12 @@ suite('SessionMetadataState', () => {
     assert.deepStrictEqual(state.getWebviewState().startupResources, [
       { name: 'Context', items: ['AGENTS.md'] }
     ]);
+    assert.strictEqual(state.getWebviewState().startupResourcesLoaded, true);
 
     assert.strictEqual(state.applyStartupResources({ sections: [{ name: 'Context', items: ['AGENTS.md'] }] }), false);
     state.resetStartupResources();
     assert.deepStrictEqual(state.getWebviewState().startupResources, []);
+    assert.strictEqual(state.getWebviewState().startupResourcesLoaded, false);
   });
 
   test('formats known and unknown context usage with compact status tooltip', () => {

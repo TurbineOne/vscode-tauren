@@ -599,6 +599,24 @@ export class TaurenSessionManager {
       controller: new TaurenChatController({
         ...this.options,
         createClient: sessionCreateClient,
+        deleteSession: this.options.deleteSession
+          ? async (sessionPath, displayName) => {
+            const deleted = await this.options.deleteSession!(sessionPath, displayName);
+            if (deleted) {
+              this.disposeDeletedBackgroundSessions([sessionPath]);
+            }
+            return deleted;
+          }
+          : undefined,
+        deleteSessions: this.options.deleteSessions
+          ? async (targets) => {
+            const result = await this.options.deleteSessions!(targets);
+            if (result.deletedPaths.length > 0) {
+              this.disposeDeletedBackgroundSessions(result.deletedPaths);
+            }
+            return result;
+          }
+          : undefined,
         extensionUi,
         getTaurenSettingValues: () => this.getTaurenSettingValues(),
         updateTaurenSetting: (settingId, value) => this.updateTaurenSetting(settingId, value),
@@ -1192,7 +1210,7 @@ export class TaurenSessionManager {
     const resetToEmptySession = Boolean(previousSessionFile) && !nextSessionFile && messageCount === 0;
     session.state = storedMessage;
     session.outboundStateMessage = message;
-    if (message.sessions && message.sessions.length > 0) {
+    if (message.sessions && (message.sessions.length > 0 || (message.lane === 'sessions' && !message.sessionsRefreshing))) {
       this.sessionCatalog = message.sessions;
     }
     session.sessionFile = nextSessionFile;
@@ -1262,7 +1280,9 @@ export class TaurenSessionManager {
     const outboundState = active.forceFullStatePost ? state : active.outboundStateMessage ?? state;
     active.forceFullStatePost = false;
 
-    const sessions = state.sessions && state.sessions.length > 0 ? state.sessions : this.sessionCatalog;
+    const sessions = state.sessions && (state.sessions.length > 0 || (state.lane === 'sessions' && !state.sessionsRefreshing))
+      ? state.sessions
+      : this.sessionCatalog;
 
     const composerPaste = active.pendingComposerPaste;
     active.pendingComposerPaste = undefined;
@@ -1348,6 +1368,34 @@ export class TaurenSessionManager {
       const openSessionFile = getSessionFile(session.sessionFile) ?? getSessionFile(session.state?.currentSessionFile);
       return normalizeSessionPath(openSessionFile) === normalizedPath;
     });
+  }
+
+  private disposeDeletedBackgroundSessions(sessionPaths: readonly string[]): void {
+    const normalizedDeleted = new Set(
+      sessionPaths
+        .map((path) => normalizeSessionPath(path))
+        .filter(Boolean)
+    );
+
+    if (normalizedDeleted.size === 0) {
+      return;
+    }
+
+    this.sessionCatalog = this.sessionCatalog.filter(
+      (session) => !normalizedDeleted.has(normalizeSessionPath(session.path))
+    );
+
+    for (const session of [...this.sessions]) {
+      if (session.id === this.activeSessionId) {
+        continue;
+      }
+
+      const openSessionFile = getSessionFile(session.sessionFile) ?? getSessionFile(session.state?.currentSessionFile);
+
+      if (normalizedDeleted.has(normalizeSessionPath(openSessionFile))) {
+        this.disposeInactiveSession(session);
+      }
+    }
   }
 
   private hasRunningBackgroundSession(): boolean {

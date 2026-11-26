@@ -697,6 +697,169 @@ suite('TaurenChatController', () => {
     harness.controller.dispose();
   });
 
+  test('deletes multiple sessions in a single batch and keeps the active session open', async () => {
+    const sessions: WebviewSessionItem[] = [
+      {
+        path: '/sessions/current.jsonl',
+        id: 'current',
+        cwd: '/workspace',
+        name: 'Active work',
+        created: '2026-01-01T00:00:00.000Z',
+        modified: '2026-01-01T00:03:00.000Z',
+        messageCount: 2,
+        firstMessage: 'Current',
+        depth: 0,
+        isLast: false,
+        ancestorContinues: [],
+        current: true
+      },
+      {
+        path: '/sessions/old-1.jsonl',
+        id: 'old-1',
+        cwd: '/workspace',
+        name: 'Old one',
+        created: '2026-01-01T00:00:00.000Z',
+        modified: '2026-01-01T00:02:00.000Z',
+        messageCount: 1,
+        firstMessage: 'One',
+        depth: 0,
+        isLast: false,
+        ancestorContinues: [],
+        current: false
+      },
+      {
+        path: '/sessions/old-2.jsonl',
+        id: 'old-2',
+        cwd: '/workspace',
+        name: 'Old two',
+        created: '2026-01-01T00:00:00.000Z',
+        modified: '2026-01-01T00:01:00.000Z',
+        messageCount: 1,
+        firstMessage: 'Two',
+        depth: 0,
+        isLast: true,
+        ancestorContinues: [],
+        current: false
+      }
+    ];
+    const deletedBatches: Array<readonly { sessionPath: string; displayName: string }[]> = [];
+    const deletedSet = new Set<string>();
+    const harness = createControllerHarness([new FakePiClient()], {
+      initialSessionFile: '/sessions/current.jsonl',
+      listSessions: async () => sessions.filter((session) => !deletedSet.has(session.path)),
+      deleteSessions: async (targets) => {
+        deletedBatches.push(targets);
+        for (const target of targets) {
+          deletedSet.add(target.sessionPath);
+        }
+        return {
+          deletedPaths: targets.map((target) => target.sessionPath),
+          mode: 'trash'
+        };
+      }
+    });
+
+    await harness.controller.handleWebviewMessage({ type: 'showLane', lane: 'sessions' });
+    await harness.controller.handleWebviewMessage({
+      type: 'deleteSessions',
+      sessionPaths: ['/sessions/old-1.jsonl', '/sessions/old-2.jsonl']
+    });
+
+    assert.deepStrictEqual(deletedBatches, [[
+      { sessionPath: '/sessions/old-1.jsonl', displayName: 'Old one' },
+      { sessionPath: '/sessions/old-2.jsonl', displayName: 'Old two' }
+    ]]);
+    assert.deepStrictEqual(lastState(harness).sessions?.map((session) => session.path), ['/sessions/current.jsonl']);
+    assert.strictEqual(lastState(harness).currentSessionFile, '/sessions/current.jsonl');
+    assert.deepStrictEqual(harness.toasts, ['2 sessions moved to Trash.']);
+    harness.controller.dispose();
+  });
+
+  test('bulk deletion resets the current session when included and blocks running sessions', async () => {
+    const sessions: WebviewSessionItem[] = [
+      {
+        path: '/sessions/current.jsonl',
+        id: 'current',
+        cwd: '/workspace',
+        name: 'Current work',
+        created: '2026-01-01T00:00:00.000Z',
+        modified: '2026-01-01T00:02:00.000Z',
+        messageCount: 1,
+        firstMessage: 'Current',
+        depth: 0,
+        isLast: false,
+        ancestorContinues: [],
+        current: true
+      },
+      {
+        path: '/sessions/running.jsonl',
+        id: 'running',
+        cwd: '/workspace',
+        name: 'Running work',
+        created: '2026-01-01T00:00:00.000Z',
+        modified: '2026-01-01T00:01:00.000Z',
+        messageCount: 1,
+        firstMessage: 'Running',
+        depth: 0,
+        isLast: false,
+        ancestorContinues: [],
+        current: false,
+        liveStatus: 'running'
+      },
+      {
+        path: '/sessions/old.jsonl',
+        id: 'old',
+        cwd: '/workspace',
+        name: 'Old work',
+        created: '2026-01-01T00:00:00.000Z',
+        modified: '2026-01-01T00:00:30.000Z',
+        messageCount: 1,
+        firstMessage: 'Old',
+        depth: 0,
+        isLast: true,
+        ancestorContinues: [],
+        current: false
+      }
+    ];
+    const deletedSet = new Set<string>();
+    const harness = createControllerHarness([new FakePiClient(), new FakePiClient()], {
+      initialSessionFile: '/sessions/current.jsonl',
+      listSessions: async () => sessions.filter((session) => !deletedSet.has(session.path)),
+      deleteSessions: async (targets) => {
+        for (const target of targets) {
+          deletedSet.add(target.sessionPath);
+        }
+        return {
+          deletedPaths: targets.map((target) => target.sessionPath),
+          mode: 'deleted'
+        };
+      }
+    });
+
+    await harness.controller.handleWebviewMessage({ type: 'showLane', lane: 'sessions' });
+    await harness.controller.handleWebviewMessage({
+      type: 'deleteSessions',
+      sessionPaths: ['/sessions/running.jsonl', '/sessions/old.jsonl']
+    });
+    assert.strictEqual(deletedSet.size, 0);
+    assert.deepStrictEqual(harness.notifications, [{
+      message: 'Wait for the session to finish before deleting it.',
+      type: 'warning'
+    }]);
+
+    await harness.controller.handleWebviewMessage({
+      type: 'deleteSessions',
+      sessionPaths: ['/sessions/current.jsonl', '/sessions/old.jsonl']
+    });
+    await flushPromises();
+
+    assert.strictEqual(lastState(harness).lane, 'sessions');
+    assert.strictEqual(lastState(harness).currentSessionFile, '');
+    assert.deepStrictEqual(lastState(harness).sessions?.map((session) => session.path), ['/sessions/running.jsonl']);
+    assert.deepStrictEqual(harness.toasts, ['2 sessions deleted.']);
+    harness.controller.dispose();
+  });
+
   test('show current changes opens active session diff without creating a Pi client', async () => {
     const shownChanges: Array<{ path: string; name: string }> = [];
     const harness = createControllerHarness([], {
@@ -3644,6 +3807,7 @@ type ControllerHarnessOptions = {
   restartOpenSessions?: () => Promise<number>;
   hasBusyOpenSession?: () => boolean;
   deleteSession?: TaurenChatControllerOptions['deleteSession'];
+  deleteSessions?: TaurenChatControllerOptions['deleteSessions'];
   showSessionChanges?: (sessionPath: string, displayName: string) => Promise<void>;
   getReadyScript?: () => string | undefined;
   getReadyScriptEnabled?: () => boolean;
@@ -3694,6 +3858,7 @@ function createControllerHarness(
     restartOpenSessions: options.restartOpenSessions,
     hasBusyOpenSession: options.hasBusyOpenSession,
     deleteSession: options.deleteSession,
+    deleteSessions: options.deleteSessions,
     showSessionChanges: options.showSessionChanges,
     getReadyScript: options.getReadyScript,
     getReadyScriptEnabled: options.getReadyScriptEnabled,

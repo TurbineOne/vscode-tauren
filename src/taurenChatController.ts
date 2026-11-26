@@ -106,6 +106,7 @@ export class TaurenChatController {
       navigation: this.navigation,
       createClient: options.createClient,
       deleteSession: options.deleteSession,
+      deleteSessions: options.deleteSessions,
       extensionUi: options.extensionUi,
       initialSessionFile: options.initialSessionFile,
       listSessions: options.listSessions,
@@ -432,6 +433,9 @@ export class TaurenChatController {
       case 'deleteSession':
         await this.sessionView.deleteSession(message.sessionPath);
         return;
+      case 'deleteSessions':
+        await this.sessionView.deleteSessions(message.sessionPaths);
+        return;
       case 'sessionItemCommand':
         await this.sessionView.runSessionItemCommand(message.sessionPath, message.command);
         return;
@@ -692,6 +696,7 @@ export class TaurenChatController {
 
     this.piEventHandler.reset();
     this.resetAbortState();
+    this.sessionMetadataRefresh.invalidate();
     this.session.startNewSession();
     this.sessionView.startNewSession(options.lane ?? 'chat');
     this.sessionDiffController.reset(undefined);
@@ -701,6 +706,7 @@ export class TaurenChatController {
     this.resetWebviewChatSync();
     this.resetReadyScriptArming();
     this.resetSessionMeta();
+    this.sessionMetadata.resetSlashCommands();
     this.disposeClient();
     this.postState();
     void this.refreshSessionMeta({ startClient: true });
@@ -829,6 +835,7 @@ export class TaurenChatController {
       slashCommands: metadataState.slashCommands,
       slashCommandsRefreshing: metadataState.slashCommandsRefreshing,
       startupResources: metadataState.startupResources,
+      startupResourcesLoaded: metadataState.startupResourcesLoaded,
       startupResourcesReloadRevision: this.startupResourcesReloadRevision,
       outputColors: this.options.getOutputColors?.() ?? true,
       animationsEnabled: this.options.getAnimationsEnabled?.() ?? true,
@@ -1319,6 +1326,7 @@ export class TaurenChatController {
     this.disposeClient();
     this.piEventHandler.reset();
     this.resetAbortState();
+    this.sessionMetadataRefresh.invalidate();
     this.session.startNewSession();
     this.sessionView.startNewSession('chat');
     this.sessionDiffController.reset(undefined);
@@ -1326,6 +1334,8 @@ export class TaurenChatController {
     this.sessionHistory.startNewSession();
     this.resetReadyScriptArming();
     this.resetSessionMeta();
+    this.sessionMetadata.resetSlashCommands();
+    this.startupResourcesReloadRevision += 1;
     this.session.addSystemMessage(`Workspace changed to ${cwd}. Restarting Pi engine for the new workspace.`);
     this.postState();
     void this.refreshSessionMeta({ startClient: true, force: true });

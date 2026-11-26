@@ -12,8 +12,15 @@ import type {
   PiClientOptions,
   PiSessionState,
   PiSessionStats,
+  PiStartupResources,
   PiEvent
 } from '../../pi/types';
+import {
+  applyStartupResourcesCache,
+  createStartupResourcesCache,
+  initialWebviewState,
+  parseWebviewStateMessage
+} from '../../webview/state';
 
 suite('TaurenSessionManager', () => {
   test('new session action disables backend auto-resume', async () => {
@@ -1452,6 +1459,106 @@ suite('TaurenSessionManager', () => {
     assert.deepStrictEqual(secondClient.forkedEntries, []);
     harness.manager.dispose();
   });
+
+  test('new session updates Welcome to Tauren startup resources when skills change', async () => {
+    let resolveUpdatedResources!: (value: PiStartupResources) => void;
+    const updatedResourcesPromise = new Promise<PiStartupResources>((resolve) => {
+      resolveUpdatedResources = resolve;
+    });
+    const firstClient = new FakePiClient({
+      startupResources: { sections: [{ name: 'Skills', items: ['old-skill'] }] }
+    });
+    const secondClient = new FakePiClient({
+      startupResources: updatedResourcesPromise
+    });
+    const thirdClient = new FakePiClient({
+      startupResources: { sections: [] }
+    });
+    const harness = createManagerHarness([firstClient, secondClient, thirdClient]);
+
+    let cache = createStartupResourcesCache();
+    let webviewState = initialWebviewState;
+    const syncWebview = (): void => {
+      while (harness.states.length > 0) {
+        const message = harness.states.shift()!;
+        const parsed = parseWebviewStateMessage(message, webviewState);
+        const cached = applyStartupResourcesCache(parsed, cache);
+        webviewState = cached.state;
+        cache = cached.cache;
+      }
+    };
+
+    await harness.manager.handleWebviewMessage({ type: 'ready' });
+    await flushPromises();
+    syncWebview();
+
+    assert.deepStrictEqual(webviewState.startupResources, [{ name: 'Skills', items: ['old-skill'] }]);
+
+    await harness.manager.handleWebviewMessage({ type: 'newSession' });
+    await flushPromises();
+    syncWebview();
+
+    // While the new session's startup resources are still in flight, keep the placeholder.
+    assert.deepStrictEqual(webviewState.startupResources, [{ name: 'Skills', items: ['old-skill'] }]);
+
+    resolveUpdatedResources({ sections: [{ name: 'Skills', items: ['new-skill-a', 'new-skill-b'] }] });
+    await flushPromises();
+    syncWebview();
+
+    assert.deepStrictEqual(webviewState.startupResources, [{ name: 'Skills', items: ['new-skill-a', 'new-skill-b'] }]);
+
+    await harness.manager.handleWebviewMessage({ type: 'newSession' });
+    await flushPromises();
+    syncWebview();
+
+    assert.deepStrictEqual(webviewState.startupResources, []);
+    harness.manager.dispose();
+  });
+
+  test('bulk deleting all sessions disposes inactive open sessions and clears the session catalog', async () => {
+    const firstClient = new FakePiClient({ state: { sessionFile: '/sessions/one.jsonl' } });
+    const secondClient = new FakePiClient({ state: { sessionFile: '/sessions/two.jsonl' } });
+    const thirdClient = new FakePiClient();
+    const deletedSet = new Set<string>();
+    const harness = createManagerHarness([firstClient, secondClient, thirdClient], {
+      initialSessionFile: '/sessions/one.jsonl',
+      listSessions: async (_cwd, currentSessionFile) =>
+        createSessionItems(currentSessionFile).filter((session) => !deletedSet.has(session.path)),
+      deleteSessions: async (targets) => {
+        for (const target of targets) {
+          deletedSet.add(target.sessionPath);
+        }
+        return {
+          deletedPaths: targets.map((target) => target.sessionPath),
+          mode: 'trash'
+        };
+      }
+    });
+
+    await harness.manager.handleWebviewMessage({ type: 'ready' });
+    await flushPromises();
+    await harness.manager.handleWebviewMessage({ type: 'selectSession', sessionPath: '/sessions/two.jsonl' });
+    await flushPromises();
+    await harness.manager.handleWebviewMessage({ type: 'showLane', lane: 'sessions' });
+    await flushPromises();
+
+    assert.strictEqual(firstClient.disposed, false);
+    assert.deepStrictEqual(lastState(harness).sessions?.map((session) => session.path), [
+      '/sessions/one.jsonl',
+      '/sessions/two.jsonl'
+    ]);
+
+    await harness.manager.handleWebviewMessage({
+      type: 'deleteSessions',
+      sessionPaths: ['/sessions/one.jsonl', '/sessions/two.jsonl']
+    });
+    await flushPromises();
+
+    assert.strictEqual(firstClient.disposed, true);
+    assert.strictEqual(lastState(harness).lane, 'sessions');
+    assert.deepStrictEqual(lastState(harness).sessions, []);
+    harness.manager.dispose();
+  });
 });
 
 type ManagerHarness = {
@@ -1472,6 +1579,7 @@ type ManagerHarnessOptions = {
   taurenSettings?: Partial<Record<TaurenSettingId, SettingValue>>;
   onSessionFileChange?: (sessionFile: string | undefined) => void;
   listSessions?: TaurenSessionManagerOptions['listSessions'];
+  deleteSessions?: TaurenSessionManagerOptions['deleteSessions'];
   loadSessionDiffSnapshot?: TaurenSessionManagerOptions['loadSessionDiffSnapshot'];
 };
 
@@ -1507,6 +1615,7 @@ function createManagerHarness(
     initialSessionFile: options.initialSessionFile,
     onSessionFileChange: options.onSessionFileChange,
     listSessions: options.listSessions,
+    deleteSessions: options.deleteSessions,
     loadSessionDiffSnapshot: options.loadSessionDiffSnapshot,
     customUi: {
       isAvailable: () => true,
@@ -1600,7 +1709,16 @@ class FakePiClient implements PiClient {
   private readonly eventListeners = new Set<(event: PiEvent) => void>();
   private readonly errorListeners = new Set<(message: string) => void>();
 
-  public constructor(private readonly options: { state?: PiSessionState } = {}) {}
+  public constructor(private readonly options: {
+    state?: PiSessionState;
+    startupResources?: PiStartupResources | Promise<PiStartupResources>;
+  } = {}) {
+    if (options.startupResources !== undefined) {
+      this.getStartupResources = async () => await options.startupResources!;
+    }
+  }
+
+  public getStartupResources?: () => Promise<PiStartupResources>;
 
   public isRunning(): boolean {
     return !this.disposed;

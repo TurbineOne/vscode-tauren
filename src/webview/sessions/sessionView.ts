@@ -10,9 +10,19 @@ import { SessionTreeController } from './sessionTreeController';
 import { getVirtualSessionRange } from './sessionVirtualization';
 import {
   canOpenSessionItemMenu,
+  getSessionItemCommandIcon,
   parseSessionItemCommand,
   sessionItemMenuCommands
 } from './sessionItemCommands';
+import {
+  areAllVisibleDeletableSessionsChecked,
+  canSelectSessionForDeletion,
+  getOrderedCheckedSessionPaths,
+  getVisibleDeletableSessionPaths,
+  pruneCheckedSessionPaths,
+  selectVisibleSessionPaths,
+  toggleCheckedSessionPath
+} from './sessionSelection';
 import { shouldOpenSessionListContextMenu } from './sessionContextMenu';
 import { createSessionEmptyElement, eventTargetElement, getSessionListCommandForKey } from './sessionUiHelpers';
 import { TopSessionControls } from './topSessionControls';
@@ -46,6 +56,7 @@ export type SessionViewControllerOptions = {
 
 export class SessionViewController {
   private sessionListSelectedIndex = 0;
+  private checkedSessionPaths = new Set<string>();
   private sessionSearchQuery = '';
   private sessionNamedOnlyFilter = false;
   private sessionSearchRequestId = 0;
@@ -142,6 +153,12 @@ export class SessionViewController {
       return this.handleNamedOnlyFilterKeydown(event);
     }
 
+    const bulkActionButton = target?.closest('.sessions__bulk-button');
+
+    if (bulkActionButton instanceof HTMLButtonElement && state.lane === 'sessions') {
+      return this.handleBulkActionButtonKeydown(event, bulkActionButton);
+    }
+
     const sessionListNameInput = target?.closest('.sessions__name-input');
 
     if (sessionListNameInput instanceof HTMLInputElement) {
@@ -183,6 +200,8 @@ export class SessionViewController {
       this.openSessionListMenuPosition = undefined;
       this.clearPendingSessionItemMenuClose();
       this.stopSessionListNameEdit();
+      this.checkedSessionPaths.clear();
+      this.options.sessionsElement.classList.remove('sessions--selection-mode');
     }
 
     this.topControls.syncForRender(isSessionLane);
@@ -200,7 +219,13 @@ export class SessionViewController {
     if (nameInput) {
       this.sessionListNameEditValue = nameInput.value;
     }
-    const count = Array.isArray(state.sessions) ? state.sessions.length : 0;
+    const sessions = Array.isArray(state.sessions) ? state.sessions : [];
+    const count = sessions.length;
+    this.checkedSessionPaths = pruneCheckedSessionPaths(this.checkedSessionPaths, sessions, {
+      busy: state.busy,
+      sessionsRefreshing: state.sessionsRefreshing
+    });
+    this.options.sessionsElement.classList.toggle('sessions--selection-mode', this.checkedSessionPaths.size > 0);
     const visibleIndexes = this.getVisibleSessionIndexes();
     const filtersActive = this.hasActiveSessionListFilters();
     this.sessionListSelectedIndex = ensureVisibleSessionSelection(this.sessionListSelectedIndex, visibleIndexes);
@@ -213,8 +238,6 @@ export class SessionViewController {
     const search = this.createSessionSearchElement();
     this.options.sessionsElement.append(search);
 
-    const header = document.createElement('div');
-    header.className = 'sessions__header';
     if (this.openSessionListMenuIndex !== undefined && !visibleIndexes.includes(this.openSessionListMenuIndex)) {
       this.openSessionListMenuIndex = undefined;
       this.openSessionListMenuPosition = undefined;
@@ -228,15 +251,7 @@ export class SessionViewController {
       this.openSessionListMenuPosition = undefined;
       this.clearPendingSessionItemMenuClose();
     }
-    const headerText = state.sessionsRefreshing
-      ? 'Loading sessions...'
-      : filtersActive && visibleIndexes.length !== count
-      ? visibleIndexes.length + ' of ' + count + ' sessions'
-      : count === 1
-      ? '1 session'
-      : count + ' sessions';
-    const searchStatusText = this.getSessionSearchStatusText();
-    header.textContent = searchStatusText ? `${headerText} · ${searchStatusText}` : headerText;
+    const header = this.createSessionHeaderElement(count, visibleIndexes, filtersActive);
     this.options.sessionsElement.append(header);
 
     if (state.sessionsError) {
@@ -256,10 +271,13 @@ export class SessionViewController {
       this.appendSessionVirtualSpacer(renderWindow.topPadding, 'top');
 
       for (const index of renderWindow.indexes) {
+        const session = sessions[index];
         this.options.sessionsElement.append(createSessionItemElement({
-          session: state.sessions[index],
+          session,
           index,
           selectedIndex,
+          checked: this.checkedSessionPaths.has(session.path),
+          canCheckSession: (entry) => this.canDeleteSession(entry),
           nameEditPath: this.sessionListNameEditPath,
           nameEditValue: this.sessionListNameEditValue,
           openMenuIndex: this.openSessionListMenuIndex,
@@ -461,6 +479,28 @@ export class SessionViewController {
       return;
     }
 
+    const bulkButton = target?.closest('.sessions__bulk-button');
+
+    if (bulkButton instanceof HTMLButtonElement) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.closeSessionItemMenus();
+      this.runBulkHeaderAction(bulkButton.getAttribute('data-bulk-action'));
+      return;
+    }
+
+    const sessionCheckbox = target?.closest('.sessions__checkbox');
+
+    if (sessionCheckbox) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.closeSessionItemMenus();
+      const item = sessionCheckbox.closest('.sessions__item');
+      const index = Number(item?.getAttribute('data-index'));
+      this.toggleSessionChecked(index, { focusList: true });
+      return;
+    }
+
     const sessionMenuButton = target?.closest('.sessions__menu-button');
 
     if (sessionMenuButton) {
@@ -492,7 +532,17 @@ export class SessionViewController {
 
     this.closeSessionItemMenus();
     const index = Number(item.getAttribute('data-index'));
-    state.lane === 'tree' ? this.treeController.selectIndex(index) : this.selectSessionIndex(index);
+    if (state.lane === 'tree') {
+      this.treeController.selectIndex(index);
+      return;
+    }
+
+    if (this.hasCheckedSessions()) {
+      this.toggleSessionChecked(index, { focusList: true });
+      return;
+    }
+
+    this.selectSessionIndex(index);
   }
 
   private handleSessionListContextMenu(event: MouseEvent): void {
@@ -603,7 +653,22 @@ export class SessionViewController {
     }
 
     if (event.key === 'Escape') {
+      if (state.lane === 'sessions' && this.hasCheckedSessions()) {
+        event.preventDefault();
+        event.stopPropagation();
+        this.clearCheckedSessions({ focusList: true });
+        return true;
+      }
+
       this.hideSessionList(event);
+      return true;
+    }
+
+    if (state.lane === 'sessions' && event.key === ' ' && !event.altKey && !event.ctrlKey && !event.metaKey) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.closeSessionItemMenus();
+      this.toggleSessionChecked(this.sessionListSelectedIndex, { focusList: true });
       return true;
     }
 
@@ -648,7 +713,11 @@ export class SessionViewController {
     if (state.lane === 'sessions' && (event.key === 'Delete' || event.key === 'Backspace')) {
       event.preventDefault();
       event.stopPropagation();
-      this.deleteSessionIndex(this.sessionListSelectedIndex);
+      if (this.hasCheckedSessions()) {
+        this.deleteCheckedSessions();
+      } else {
+        this.deleteSessionIndex(this.sessionListSelectedIndex);
+      }
       return true;
     }
 
@@ -1311,6 +1380,13 @@ export class SessionViewController {
         return true;
       }
 
+      if (this.hasCheckedSessions()) {
+        event.preventDefault();
+        event.stopPropagation();
+        this.clearCheckedSessions({ focusList: true });
+        return true;
+      }
+
       this.hideSessionList(event);
       return true;
     }
@@ -1480,7 +1556,207 @@ export class SessionViewController {
 
   private canDeleteSession(session: SessionItem): boolean {
     const state = this.options.getState();
-    return session.liveStatus !== 'running' && !(session.current && state.busy);
+    return canSelectSessionForDeletion(session, state.busy);
+  }
+
+  private hasCheckedSessions(): boolean {
+    return this.checkedSessionPaths.size > 0;
+  }
+
+  private createSessionHeaderElement(
+    count: number,
+    visibleIndexes: number[],
+    filtersActive: boolean
+  ): HTMLElement {
+    const state = this.options.getState();
+
+    if (this.checkedSessionPaths.size > 0) {
+      return this.createBulkSessionHeaderElement(visibleIndexes, filtersActive);
+    }
+
+    const header = document.createElement('div');
+    header.className = 'sessions__header';
+    const headerText = state.sessionsRefreshing
+      ? 'Loading sessions...'
+      : filtersActive && visibleIndexes.length !== count
+      ? visibleIndexes.length + ' of ' + count + ' sessions'
+      : count === 1
+      ? '1 session'
+      : count + ' sessions';
+    const searchStatusText = this.getSessionSearchStatusText();
+    header.textContent = searchStatusText ? `${headerText} · ${searchStatusText}` : headerText;
+    return header;
+  }
+
+  private createBulkSessionHeaderElement(
+    visibleIndexes: number[],
+    filtersActive: boolean
+  ): HTMLElement {
+    const state = this.options.getState();
+    const sessions = Array.isArray(state.sessions) ? state.sessions : [];
+    const checkedCount = this.checkedSessionPaths.size;
+    const visibleDeletableCount = getVisibleDeletableSessionPaths(sessions, visibleIndexes, state.busy).length;
+    const allVisibleChecked = areAllVisibleDeletableSessionsChecked(
+      this.checkedSessionPaths,
+      sessions,
+      visibleIndexes,
+      state.busy
+    );
+
+    const header = document.createElement('div');
+    header.className = 'sessions__header sessions__header--bulk';
+
+    const countLabel = document.createElement('span');
+    countLabel.className = 'sessions__bulk-count';
+    countLabel.textContent = `${checkedCount} selected`;
+    header.append(countLabel);
+
+    const actions = document.createElement('span');
+    actions.className = 'sessions__bulk-actions';
+
+    const selectVisibleButton = document.createElement('button');
+    selectVisibleButton.type = 'button';
+    selectVisibleButton.className = 'sessions__bulk-button';
+    selectVisibleButton.setAttribute('data-bulk-action', 'select-visible');
+    selectVisibleButton.textContent = filtersActive ? 'Select visible' : 'Select all';
+    selectVisibleButton.disabled = state.sessionsRefreshing || visibleDeletableCount === 0 || allVisibleChecked;
+    actions.append(selectVisibleButton);
+
+    const clearButton = document.createElement('button');
+    clearButton.type = 'button';
+    clearButton.className = 'sessions__bulk-button';
+    clearButton.setAttribute('data-bulk-action', 'clear');
+    clearButton.textContent = 'Clear';
+    clearButton.disabled = state.sessionsRefreshing;
+    actions.append(clearButton);
+
+    const deleteButton = document.createElement('button');
+    deleteButton.type = 'button';
+    deleteButton.className = 'sessions__bulk-button sessions__bulk-button--danger';
+    deleteButton.setAttribute('data-bulk-action', 'delete');
+    deleteButton.setAttribute(
+      'aria-label',
+      checkedCount === 1
+        ? 'Move selected session to trash'
+        : `Move ${checkedCount} selected sessions to trash`
+    );
+    deleteButton.disabled = state.sessionsRefreshing;
+    deleteButton.innerHTML = getSessionItemCommandIcon('delete') + '<span>Delete</span>';
+    actions.append(deleteButton);
+
+    header.append(actions);
+    return header;
+  }
+
+  private handleBulkActionButtonKeydown(event: KeyboardEvent, button: HTMLButtonElement): boolean {
+    if (event.altKey || event.ctrlKey || event.metaKey) {
+      return false;
+    }
+
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      this.clearCheckedSessions({ focusList: true });
+      return true;
+    }
+
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!button.disabled) {
+        this.runBulkHeaderAction(button.getAttribute('data-bulk-action'));
+      }
+      return true;
+    }
+
+    return false;
+  }
+
+  private runBulkHeaderAction(action: string | null): void {
+    switch (action) {
+      case 'select-visible':
+        this.selectVisibleSessions();
+        return;
+      case 'clear':
+        this.clearCheckedSessions({ focusList: true });
+        return;
+      case 'delete':
+        this.deleteCheckedSessions();
+        return;
+      default:
+        return;
+    }
+  }
+
+  private toggleSessionChecked(index: number, options: { focusList?: boolean } = {}): void {
+    const state = this.options.getState();
+
+    if (!Number.isInteger(index) || !this.isSessionIndexVisible(index)) {
+      return;
+    }
+
+    const session = Array.isArray(state.sessions) ? state.sessions[index] : undefined;
+
+    if (!session || !this.canDeleteSession(session)) {
+      return;
+    }
+
+    this.sessionListSelectedIndex = this.clampSessionIndex(index);
+    this.checkedSessionPaths = toggleCheckedSessionPath(this.checkedSessionPaths, session, state.busy);
+    this.renderSessions();
+
+    if (options.focusList) {
+      requestAnimationFrame(() => this.options.sessionsElement.focus({ preventScroll: true }));
+    }
+  }
+
+  private selectVisibleSessions(): void {
+    const state = this.options.getState();
+    const sessions = Array.isArray(state.sessions) ? state.sessions : [];
+    const visibleIndexes = this.getVisibleSessionIndexes();
+    this.checkedSessionPaths = selectVisibleSessionPaths(
+      this.checkedSessionPaths,
+      sessions,
+      visibleIndexes,
+      state.busy
+    );
+    this.renderSessions();
+    requestAnimationFrame(() => this.options.sessionsElement.focus({ preventScroll: true }));
+  }
+
+  private clearCheckedSessions(options: { focusList?: boolean } = {}): void {
+    if (this.checkedSessionPaths.size === 0) {
+      return;
+    }
+
+    this.checkedSessionPaths.clear();
+    this.renderSessions();
+
+    if (options.focusList) {
+      requestAnimationFrame(() => this.options.sessionsElement.focus({ preventScroll: true }));
+    }
+  }
+
+  private deleteCheckedSessions(): void {
+    const state = this.options.getState();
+
+    if (state.sessionsRefreshing) {
+      return;
+    }
+
+    const sessions = Array.isArray(state.sessions) ? state.sessions : [];
+    const sessionPaths = getOrderedCheckedSessionPaths(this.checkedSessionPaths, sessions, state.busy);
+
+    if (sessionPaths.length === 0) {
+      return;
+    }
+
+    if (sessionPaths.length === 1) {
+      this.options.postMessage({ type: 'deleteSession', sessionPath: sessionPaths[0] });
+      return;
+    }
+
+    this.options.postMessage({ type: 'deleteSessions', sessionPaths });
   }
 
   private getVisibleSessionIndexes(): number[] {

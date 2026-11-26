@@ -38,6 +38,7 @@ export type SessionMetadataWebviewState = {
   slashCommands: WebviewSlashCommand[];
   slashCommandsRefreshing: boolean;
   startupResources: WebviewStartupResourceSection[];
+  startupResourcesLoaded: boolean;
   piSettings: PiRuntimeSettingsMeta;
   activePersonaLabel: string;
 };

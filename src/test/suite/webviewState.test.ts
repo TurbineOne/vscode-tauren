@@ -21,6 +21,7 @@ suite('Webview state helpers', () => {
     assert.strictEqual(initialWebviewState.customUiTheme, 'default');
     assert.deepStrictEqual(initialWebviewState.extensionStatus, []);
     assert.deepStrictEqual(initialWebviewState.startupResources, []);
+    assert.strictEqual(initialWebviewState.startupResourcesLoaded, false);
     assert.strictEqual(initialWebviewState.startupResourcesReloadRevision, 0);
     assert.strictEqual(initialWebviewState.allowRemoteImages, false);
     assert.strictEqual(initialWebviewState.welcomeDismissed, false);
@@ -186,6 +187,8 @@ suite('Webview state helpers', () => {
       workspaceDiffStats: { addedLines: 5, removedLines: 2 },
       extensionFooter: { line: 'Footer line' },
       extensionWidgets: [{ key: 'widget-1', placement: 'aboveEditor', lines: ['Widget line'] }],
+      startupResources: [{ name: 'Skills', items: ['old-skill'] }],
+      startupResourcesLoaded: true,
       promptContext: [{ id: 'context-1', kind: 'file', label: 'file.ts', title: 'src/file.ts' }],
       lane: 'sessions',
       currentSessionFile: '/session.jsonl',
@@ -205,6 +208,8 @@ suite('Webview state helpers', () => {
     assert.strictEqual(optimistic.contextUsageLabel, '');
     assert.strictEqual(optimistic.sessionLoading, false);
     assert.strictEqual(optimistic.modelLabel, 'gpt-test');
+    assert.deepStrictEqual(optimistic.startupResources, [{ name: 'Skills', items: ['old-skill'] }]);
+    assert.strictEqual(optimistic.startupResourcesLoaded, false);
     assert.deepStrictEqual(optimistic.promptContext, previous.promptContext);
     assert.deepStrictEqual(optimistic.extensionFooter, { line: 'Footer line' });
     assert.deepStrictEqual(optimistic.extensionWidgets, [{ key: 'widget-1', placement: 'aboveEditor', lines: ['Widget line'] }]);
@@ -248,32 +253,43 @@ suite('Webview state helpers', () => {
     assert.deepStrictEqual(replaced.state.extensionWidgets, [{ key: 'widget-2', placement: 'aboveEditor', lines: ['New widget'] }]);
   });
 
-  test('uses cached startup resources until reload revision changes', () => {
+  test('keeps cached startup resources while a new session is loading and replaces them once loaded', () => {
     let cache = createStartupResourcesCache();
     const initial = parseWebviewStateMessage({
-      startupResources: [{ name: 'Context', items: ['AGENTS.md'] }]
+      startupResources: [{ name: 'Skills', items: ['old-skill'] }],
+      startupResourcesLoaded: true
     });
 
     let result = applyStartupResourcesCache(initial, cache);
     cache = result.cache;
 
     assert.strictEqual(cache.initialized, true);
-    assert.deepStrictEqual(result.state.startupResources, [{ name: 'Context', items: ['AGENTS.md'] }]);
+    assert.deepStrictEqual(result.state.startupResources, [{ name: 'Skills', items: ['old-skill'] }]);
 
+    // New session posts state before getStartupResources() resolves.
+    result = applyStartupResourcesCache(parseWebviewStateMessage({}, result.state), cache);
+    cache = result.cache;
+
+    assert.strictEqual(result.state.startupResourcesLoaded, false);
+    assert.deepStrictEqual(result.state.startupResources, [{ name: 'Skills', items: ['old-skill'] }]);
+
+    // New session finishes loading updated skills without needing a /reload revision bump.
     result = applyStartupResourcesCache(parseWebviewStateMessage({
-      startupResources: [{ name: 'Context', items: ['NEW.md'] }]
+      startupResources: [{ name: 'Skills', items: ['new-skill'] }],
+      startupResourcesLoaded: true
     }, result.state), cache);
     cache = result.cache;
 
-    assert.deepStrictEqual(result.state.startupResources, [{ name: 'Context', items: ['AGENTS.md'] }]);
+    assert.deepStrictEqual(cache.resources, [{ name: 'Skills', items: ['new-skill'] }]);
+    assert.deepStrictEqual(result.state.startupResources, [{ name: 'Skills', items: ['new-skill'] }]);
 
+    // New session or reload that resolves with zero startup resources clears the cached list.
     result = applyStartupResourcesCache(parseWebviewStateMessage({
-      startupResources: [{ name: 'Context', items: ['NEW.md'] }],
-      startupResourcesReloadRevision: 1
+      startupResourcesLoaded: true
     }, result.state), cache);
 
-    assert.deepStrictEqual(result.cache.resources, [{ name: 'Context', items: ['NEW.md'] }]);
-    assert.deepStrictEqual(result.state.startupResources, [{ name: 'Context', items: ['NEW.md'] }]);
+    assert.deepStrictEqual(result.cache.resources, []);
+    assert.deepStrictEqual(result.state.startupResources, []);
   });
 
   test('falls back for malformed fields', () => {

@@ -184,6 +184,7 @@ export type WebviewMessage =
   | { type: 'dismissWelcome' }
   | { type: 'selectSession'; sessionPath: string }
   | { type: 'deleteSession'; sessionPath: string }
+  | { type: 'deleteSessions'; sessionPaths: string[] }
   | { type: 'sessionItemCommand'; sessionPath: string; command: WebviewSessionItemCommand }
   | { type: 'setSessionItemName'; sessionPath: string; name: string }
   | { type: 'selectTreeEntry'; entryId: string; summarize?: boolean; customInstructions?: string }
@@ -350,6 +351,7 @@ export type WebviewStateMessageBase = Omit<ChatState, 'messages'> & {
   extensionFooter?: WebviewExtensionFooterEntry;
   extensionWidgets: WebviewExtensionWidgetEntry[];
   startupResources?: WebviewStartupResourceSection[];
+  startupResourcesLoaded?: boolean;
   startupResourcesReloadRevision?: number;
   allowRemoteImages?: boolean;
   welcomeDismissed?: boolean;
@@ -422,6 +424,7 @@ export type CreateWebviewStateMessageOptions = {
   extensionFooter?: WebviewExtensionFooterEntry;
   extensionWidgets?: WebviewExtensionWidgetEntry[];
   startupResources?: WebviewStartupResourceSection[];
+  startupResourcesLoaded?: boolean;
   startupResourcesReloadRevision?: number;
   allowRemoteImages?: boolean;
   welcomeDismissed?: boolean;
