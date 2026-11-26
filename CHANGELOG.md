@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-26
+
 - Add opt-in per-change pre-apply diff review (`tauren.review.perChangeDiffEnabled`) for both the bundled Pi SDK and Docker Sandboxes (`sbx`) backends. When enabled, each proposed `edit`, `write`, or `hashline_edit` opens in a native VS Code diff editor where you can accept, reject, steer the model with feedback, auto-approve the rest of the session, or close the diff tab to approve.
 
 ## [0.2.0] - 2026-11-23
